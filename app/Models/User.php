@@ -4,24 +4,33 @@ namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
+use App\Enums\UserStatus;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;;
+
 
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable;
 
-    /**
-     * The attributes that are mass assignable.
-     *
-     * @var list<string>
-     */
+    protected $table = 'users';
+    protected $primaryKey = 'user_id';
+    public $incrementing = false;
+    protected $keyType = 'string';
+
     protected $fillable = [
-        'name',
+        'user_id',
+        'firebase_uid',
         'email',
-        'password',
+        'display_name',
+        'phone',
+        'avatar_url',
+        'status',
+        'last_login',
+        'pasword'
     ];
 
     /**
@@ -44,6 +53,16 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'status' => UserStatus::class,
+            'last_login' => 'datetime',
+
         ];
+    }
+
+    public function companies(): BelongsToMany
+    {
+        return $this->belongsToMany(Company::class, 'user_company', 'user_id', 'company_id')
+            ->withPivot(['role', 'is_default', 'is_enabled', 'joined_at'])
+            ->withTimestamps();
     }
 }
