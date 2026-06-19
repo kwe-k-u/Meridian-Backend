@@ -14,6 +14,7 @@ return new class extends Migration
         Schema::create('companies', function (Blueprint $table) {
             $table->string('company_id', 20)->primary();
             $table->string('company_name', 100);
+            $table->string('country', 50);
             $table->string('city_of_operation', 50)->nullable();
             $table->boolean('status')->default(true);
             $table->timestamps();

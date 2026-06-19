@@ -8,13 +8,14 @@ use App\Enums\UserStatus;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Laravel\Sanctum\HasApiTokens;
 
 
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasFactory, Notifiable, HasApiTokens;
 
     protected $table = 'users';
     protected $primaryKey = 'user_id';
@@ -30,7 +31,7 @@ class User extends Authenticatable
         'avatar_url',
         'status',
         'last_login',
-        'pasword'
+        'password'
     ];
 
     /**
@@ -61,8 +62,7 @@ class User extends Authenticatable
 
     public function companies(): BelongsToMany
     {
-        return $this->belongsToMany(Company::class, 'user_company', 'user_id', 'company_id')
-            ->withPivot(['role', 'is_default', 'is_enabled', 'joined_at'])
-            ->withTimestamps();
+        return $this->belongsToMany(Company::class, 'user_companies', 'user_id', 'company_id')
+            ->withPivot(['role', 'is_default', 'is_enabled', 'joined_at']);
     }
 }

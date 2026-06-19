@@ -119,7 +119,7 @@ class AuthController extends Controller
             $company = Company::create([
                 'company_id' => $companyId,
                 'company_name' => $validated['company_name'],
-                'city_of_operation' => $validated['country'],
+                'country' => $validated['country'],
                 'status' => true,
             ]);
 
@@ -151,6 +151,7 @@ class AuthController extends Controller
                 'company' => $company
             ], 201);
         } catch (Exception $e) {
+            DB::rollBack();
             return response()->json([
                 'error' => 'Registration Failed',
                 'message' => 'An error occurred while provisioning your corporate workspace accounts. Please try again.',

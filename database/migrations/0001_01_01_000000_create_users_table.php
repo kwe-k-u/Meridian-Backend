@@ -20,6 +20,7 @@ return new class extends Migration
             $table->string('avatar_url', 500)->nullable();
             $table->string('status')->default('pending'); // Managed via Enum
             $table->timestamp('email_verified_at')->nullable();
+            $table->timestamp('last_login')->nullable();
             $table->string('password');
             $table->rememberToken();
             $table->timestamps();
