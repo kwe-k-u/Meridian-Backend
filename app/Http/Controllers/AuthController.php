@@ -15,12 +15,6 @@ use Illuminate\Support\Facades\DB;
 
 class AuthController extends Controller
 {
-    /**
-     * Handle standard username/email and password authentication.
-     *
-     * @param Request $request
-     * @return JsonResponse
-     */
     public function login(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -95,5 +89,51 @@ class AuthController extends Controller
                 'message' => 'Could not dispatch password reset link. Please try again later.',
             ], 500);
         }
+    }
+
+    public function resetPassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'token' => 'required|string',
+            'email' => 'required|email|exists:users,email',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $email = $request->input('email');
+        $token = $request->input('token');
+
+        $resetRecord = DB::table('password_reset_tokens')
+            ->where('email', $email)
+            ->first();
+
+        if (!$resetRecord || !Hash::check($token, $resetRecord->token)) {
+            return response()->json([
+                'error' => 'Invalid Token',
+                'message' => 'This password reset link is invalid or has already been used.'
+            ], 422);
+        }
+
+        $tokenExpirationMinutes = config('auth.passwords.users.expire', 30);
+        if (Carbon::parse($resetRecord->created_at)->addMinutes($tokenExpirationMinutes)->isPast()) {
+            DB::table('password_reset_tokens')->where('email', $email)->delete();
+            return response()->json([
+                'error' => 'Expired Token',
+                'message' => 'This password reset link has expired. Please request a new one.'
+            ], 422);
+        }
+
+        $user = User::where('email', $email)->first();
+        $user->update([
+            'password' => Hash::make($request->input('password'))
+        ]);
+
+        if (method_exists($user, 'tokens')) {
+            $user->tokens()->delete();
+        }
+
+        DB::table('password_reset_tokens')->where('email', $email)->delete();
+        return response()->json([
+            'message' => 'Your password has been successfully reset. You can now log in with your new credentials.'
+        ], 200);
     }
 }
