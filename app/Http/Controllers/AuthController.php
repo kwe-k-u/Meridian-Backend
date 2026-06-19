@@ -20,31 +20,85 @@ class AuthController extends Controller
 {
     public function login(Request $request): JsonResponse
     {
+        // 1. Check if this is a Google Sign-In attempt
+        if ($request->has('provider_token')) {
+            return $this->handleGoogleLogin($request);
+        }
+
+        // 2. Otherwise, fall back to standard Username/Password Validation
         $validated = $request->validate([
-            'email' => 'required|email',
+            'username' => 'required|string',
             'password' => 'required|string|min:6',
         ]);
 
         $user = User::where('email', $validated['username'])->first();
+
         if (!$user || !Hash::check($validated['password'], $user->password)) {
+            return response()->json(['error' => 'Unauthorized', 'message' => 'Invalid credentials.'], 401);
+        }
+
+        return $this->issueSessionToken($user);
+    }
+
+    protected function handleGoogleLogin(Request $request): JsonResponse
+    {
+        $request->validate([
+            'provider_token' => 'required|string',
+        ]);
+
+        try {            
+            // Mocking decoding logic for simulation:
+            $firebaseUid = 'fb_' . md5($request->provider_token);
+            $email = $request->input('email');
+            $displayName = $request->input('display_name');
+            $avatarUrl = $request->input('avatar_url');
+
+            $user = User::where('firebase_uid', $firebaseUid)
+                        ->orWhere('email', $email)
+                        ->first();
+
+            if (!$user) {
+                // Just-In-Time (JIT) Provisioning: Create the account seamlessly on first social login
+                $userId = IdGeneratorService::generateId('USR');
+                $user = User::create([
+                    'user_id' => $userId,
+                    'firebase_uid' => $firebaseUid,
+                    'email' => $email,
+                    'display_name' => $displayName,
+                    'avatar_url' => $avatarUrl,
+                    'status' => UserStatus::ACTIVE,
+                    'last_login' => now(),
+                    'password' => Hash::make(Str::random(32)), 
+                ]);
+            } else {
+                // Link the Firebase UID if they originally registered via password but are now using Google
+                if (is_null($user->firebase_uid)) {
+                    $user->firebase_uid = $firebaseUid;
+                }
+                $user->last_login = now();
+                $user->save();
+            }
+
+            return $this->issueSessionToken($user);
+        } catch (Exception $e) {
             return response()->json([
-                'error' => 'Unauthorized',
-                'message' => 'The credentials provided do not match our records.'
+                'error' => 'Google Authentication Failed',
+                'message' => 'The token provided is invalid or expired.'
             ], 401);
         }
+    }
 
+    protected function issueSessionToken(User $user): JsonResponse
+    {
         if ($user->status === UserStatus::DISABLED) {
-            return response()->json([
-                'error' => 'Forbidden',
-                'message' => 'Your account has been deactivated. Please contact support.'
-            ], 403);
+            return response()->json(['error' => 'Forbidden', 'message' => 'Your account is deactivated.'], 403);
         }
 
-        $user->update(['last_login' => now()]);
         $token = $user->createToken('meridian_auth_token')->plainTextToken;
         return response()->json([
             'access_token' => $token,
             'token_type' => 'Bearer',
+            'user' => $user->load('companies'),
         ], 200);
     }
 
