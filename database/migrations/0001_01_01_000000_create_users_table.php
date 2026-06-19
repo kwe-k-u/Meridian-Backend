@@ -12,9 +12,13 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('users', function (Blueprint $table) {
-            $table->id();
-            $table->string('name');
-            $table->string('email')->unique();
+            $table->string('user_id', 20)->primary();
+            $table->string('firebase_uid', 128)->nullable()->unique();
+            $table->string('email', 255)->unique();
+            $table->string('display_name', 100)->nullable();
+            $table->string('phone', 20)->nullable();
+            $table->string('avatar_url', 500)->nullable();
+            $table->string('status')->default('pending'); // Managed via Enum
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
             $table->rememberToken();
