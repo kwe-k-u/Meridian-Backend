@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\CompanyRole;
 use App\Models\User;
 use App\Enums\UserStatus;
 use Illuminate\Http\JsonResponse;
@@ -11,6 +12,8 @@ use Illuminate\Support\Str;
 use Carbon\Carbon;
 use Exception;
 use App\Enums\CompanyStatus;
+use App\Models\Company;
+use App\Services\IdGeneratorService;
 use Illuminate\Support\Facades\DB;
 
 class AuthController extends Controller
@@ -37,15 +40,69 @@ class AuthController extends Controller
             ], 403);
         }
 
-        $user->update([
-            'last_login' => now()
-        ]);
-
+        $user->update(['last_login' => now()]);
         $token = $user->createToken('meridian_auth_token')->plainTextToken;
         return response()->json([
             'access_token' => $token,
             'token_type' => 'Bearer',
         ], 200);
+    }
+
+    public function registerCompany(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'email' => 'required|email|max:255|unique:users,email',
+            'company_name' => 'required|string|max:100',
+            'country' => 'required|string|max:100',
+            'business_type' => 'required|string|max:50',
+            'username' => 'required|string|max:50|unique:users,display_name',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            $companyId = IdGeneratorService::generateId('CMP');
+            $company = Company::create([
+                'company_id' => $companyId,
+                'company_name' => $validated['company_name'],
+                'city_of_operation' => $validated['country'],
+                'status' => true,
+            ]);
+
+            $userId = IdGeneratorService::generateId('USR');
+            $user = User::create([
+                'user_id' => $userId,
+                'email' => $validated['email'],
+                'display_name' => $validated['username'],
+                'password' => Hash::make($validated['password']),
+                'status' => UserStatus::ACTIVE,
+                'last_login' => now(),
+            ]);
+
+            $company->users()->attach($user->user_id, [
+                'role' => CompanyRole::OWNER->value,
+                'is_default' => true,
+                'is_enabled' => true,
+                'joined_at' => now(),
+            ]);
+
+            DB::commit();
+
+            $token = $user->createToken('meridian_auth_token')->plainTextToken;
+            return response()->json([
+                'message' => 'Company and owner registration completed successfully.',
+                'access_token' => $token,
+                'token_type' => 'Bearer',
+                'user' => $user,
+                'company' => $company
+            ], 201);
+        } catch (Exception $e) {
+            return response()->json([
+                'error' => 'Registration Failed',
+                'message' => 'An error occurred while provisioning your corporate workspace accounts. Please try again.',
+            ], 500);
+        }
     }
 
     public function sendResetLink(Request $request): JsonResponse
@@ -82,7 +139,6 @@ class AuthController extends Controller
             return response()->json([
                 'message' => 'If your email is registered in our database, you will receive a password reset link shortly.',
             ], 200);
-
         } catch (Exception $e) {
             return response()->json([
                 'error' => 'Server Error',
@@ -91,7 +147,7 @@ class AuthController extends Controller
         }
     }
 
-    public function resetPassword(Request $request): JsonResponse
+    public function resetForgotPassword(Request $request): JsonResponse
     {
         $request->validate([
             'token' => 'required|string',
