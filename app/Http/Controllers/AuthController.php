@@ -11,7 +11,6 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
 use Exception;
-use App\Enums\CompanyStatus;
 use App\Models\Company;
 use App\Services\IdGeneratorService;
 use Illuminate\Support\Facades\DB;
