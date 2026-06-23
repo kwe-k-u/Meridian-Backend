@@ -23,14 +23,12 @@ class AuthController extends Controller
         if ($request->has('provider_token')) {
             return $this->handleGoogleLogin($request);
         }
-
-        // 2. Otherwise, fall back to standard Username/Password Validation
         $validated = $request->validate([
-            'username' => 'required|string',
+            'email' => 'required|email|max:255',
             'password' => 'required|string|min:6',
         ]);
 
-        $user = User::where('email', $validated['username'])->first();
+        $user = User::where('email', $validated['email'])->first();
 
         if (!$user || !Hash::check($validated['password'], $user->password)) {
             return response()->json(['error' => 'Unauthorized', 'message' => 'Invalid credentials.'], 401);

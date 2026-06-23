@@ -11,6 +11,6 @@ class IdGeneratorService
         $timeHex = str_pad(dechex(time()), 8, '0', STR_PAD_LEFT);
         $randomSuffix = Str::random(8);
 
-        return '{$prefix}_' . strtoupper($timeHex . $randomSuffix);
+        return $prefix . '_' . strtoupper($timeHex . $randomSuffix);
     }
 }
