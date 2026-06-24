@@ -24,11 +24,15 @@ class AuthController extends Controller
         if ($request->has('provider_token')) {
             return $this->handleGoogleLogin($request);
         }
-        $validated = $request->validate([
+        $validator = Validator::make(request()->all(), [
             'email' => 'required|email|max:255',
             'password' => 'required|string|min:6',
         ]);
+        if ($validator->fails()) {
+            return response()->json($validator->errors(), 422);
+        }
 
+        $validated = $validator->validated();
         $user = User::where('email', $validated['email'])->first();
 
         if (!$user || !Hash::check($validated['password'], $user->password)) {
@@ -159,9 +163,13 @@ class AuthController extends Controller
 
     public function sendResetLink(Request $request): JsonResponse
     {
-        $request->validate([
+        $validator = Validator::make(request()->all(), [
             'email' => 'required|email|max:255',
         ]);
+
+        if ($validator->fails()) {
+            return response()->json($validator->errors(), 422);
+        }
 
         $email = $request->input('email');
 
@@ -201,14 +209,19 @@ class AuthController extends Controller
 
     public function resetForgotPassword(Request $request): JsonResponse
     {
-        $request->validate([
+        $validator = Validator::make(request()->all(), [
             'token' => 'required|string',
             'email' => 'required|email|exists:users,email',
             'password' => 'required|string|min:8|confirmed',
         ]);
+        if ($validator->fails()) {
+            return response()->json($validator->errors(), 422);
+        }
 
-        $email = $request->input('email');
-        $token = $request->input('token');
+        $validated = $validator->validated();
+
+        $email = $validated('email');
+        $token = $validated('token');
 
         $resetRecord = DB::table('password_reset_tokens')
             ->where('email', $email)
@@ -232,7 +245,7 @@ class AuthController extends Controller
 
         $user = User::where('email', $email)->first();
         $user->update([
-            'password' => Hash::make($request->input('password'))
+            'password' => Hash::make($validated('password'))
         ]);
 
         if (method_exists($user, 'tokens')) {
