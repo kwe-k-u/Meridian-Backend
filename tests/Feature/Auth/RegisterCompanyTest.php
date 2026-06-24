@@ -18,8 +18,6 @@ test('a user can successfully register a company and an owner account simultaneo
     ];
 
     $response = $this->postJson('/api/auth/register-company', $payload);
-    $data = $response->json();
-    print_r($data);
     // 1. Assert response metadata structure
     $response->assertStatus(201)
         ->assertJsonStructure([

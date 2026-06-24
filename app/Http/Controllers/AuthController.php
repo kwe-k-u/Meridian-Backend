@@ -14,6 +14,7 @@ use Exception;
 use App\Models\Company;
 use App\Services\IdGeneratorService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
@@ -101,7 +102,7 @@ class AuthController extends Controller
 
     public function registerCompany(Request $request): JsonResponse
     {
-        $validated = $request->validate([
+        $validator = Validator::make(request()->all(), [
             'email' => 'required|email|max:255|unique:users,email',
             'company_name' => 'required|string|max:100',
             'country' => 'required|string|max:100',
@@ -109,6 +110,12 @@ class AuthController extends Controller
             'username' => 'required|string|max:50|unique:users,display_name',
             'password' => 'required|string|min:8|confirmed',
         ]);
+
+        if ($validator->fails()) {
+            return response()->json($validator->errors(), 422);
+        }
+
+        $validated = $validator->validated();
 
         try {
             DB::beginTransaction();
@@ -140,14 +147,7 @@ class AuthController extends Controller
 
             DB::commit();
 
-            $token = $user->createToken('meridian_auth_token')->plainTextToken;
-            return response()->json([
-                'message' => 'Company and owner registration completed successfully.',
-                'access_token' => $token,
-                'token_type' => 'Bearer',
-                'user' => $user,
-                'company' => $company
-            ], 201);
+            return $this->issueSessionToken($user);
         } catch (Exception $e) {
             DB::rollBack();
             return response()->json([
