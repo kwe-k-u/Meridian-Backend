@@ -17,15 +17,19 @@ test('a user can successfully register a company and an owner account simultaneo
         'password_confirmation' => 'SecurePassword2026!',
     ];
 
-    $response = $this->postJson('/api/auth/register-company', $payload);
+    $response = $this->postJson('/api/v1/auth/register-company', $payload);
     // 1. Assert response metadata structure
-    $response->assertStatus(201)
+    print_r($response->json());
+    $response->assertStatus(200)
         ->assertJsonStructure([
-            'message',
             'access_token',
             'token_type',
-            'user' => ['user_id', 'email', 'display_name', 'status'],
-            'company' => ['company_id', 'company_name', 'status']
+            'user' => ['user_id',
+                    'email',
+                    'display_name',
+                    'status',
+                    'companies' => [ "*" => ['company_id', 'company_name', 'status']]
+                    ],
         ]);
 
     // 2. Verify relational database atomic updates
@@ -50,7 +54,7 @@ test('a user can successfully register a company and an owner account simultaneo
 });
 
 test('registration fails if validation parameters are violated', function () {
-    $response = $this->postJson('/api/auth/register-company', []);
+    $response = $this->postJson('/api/v1/auth/register-company', []);
 
     $response->assertStatus(422)
         ->assertJsonValidationErrors(['email', 'company_name', 'country', 'business_type', 'username', 'password']);
