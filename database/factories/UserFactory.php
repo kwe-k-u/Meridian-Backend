@@ -32,7 +32,7 @@ class UserFactory extends Factory
             'display_name' => $this->faker->name,
             'phone' => $this->faker->e164PhoneNumber,
             'avatar_url' => $this->faker->imageUrl(200, 200, 'people'),
-            'status' => $this->faker->randomElement(UserStatus::cases()),
+            'status' =>UserStatus::ACTIVE,
             'last_login' => $this->faker->dateTimeThisYear(),
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),

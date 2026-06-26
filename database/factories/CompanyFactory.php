@@ -15,6 +15,7 @@ class CompanyFactory extends Factory
         return [
             'company_id' => 'CMP_' . strtoupper($this->faker->unique()->lexify('????????????')),
             'company_name' => $this->faker->company,
+            'country' => $this->faker->country,
             'city_of_operation' => $this->faker->city,
             'status' => $this->faker->boolean(0.5),
         ];

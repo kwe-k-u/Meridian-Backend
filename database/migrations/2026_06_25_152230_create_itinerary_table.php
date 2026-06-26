@@ -16,7 +16,7 @@ return new class extends Migration
             $table->text('description')->nullable();
             $table->date('start_date')->nullable();
             $table->date('end_date')->nullable();
-            $table->string('status', 20);
+            $table->string('status', 20)->default('draft');
             $table->timestamps();
 
             $table->foreign('trip_id')->references('trip_id')->on('trips')->cascadeOnDelete();

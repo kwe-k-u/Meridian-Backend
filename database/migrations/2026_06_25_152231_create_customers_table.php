@@ -19,7 +19,7 @@ return new class extends Migration
             $table->date('date_of_birth')->nullable();
             $table->string('passport_number', 50)->nullable();
             $table->text('notes')->nullable();
-            $table->string('status', 20);
+            $table->string('status', 20)->default('active');
             $table->timestamps();
 
             $table->foreign('company_id')->references('company_id')->on('companies')->cascadeOnDelete();
