@@ -3,6 +3,7 @@
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CallController;
 use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DestinationController;
 use App\Http\Controllers\TripController;
 use App\Http\Controllers\ItineraryController;
@@ -17,6 +18,7 @@ Route::prefix('auth')->group(function() {
 });
 
 Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/dashboard', DashboardController::class);
     // Destinations
     Route::apiResource('destinations', DestinationController::class);
 
