@@ -43,7 +43,7 @@ class AuthController extends Controller
             'provider_token' => 'required|string',
         ]);
 
-        try {            
+        try {
             // Mocking decoding logic for simulation:
             $firebaseUid = 'fb_' . md5($request->provider_token);
             $email = $request->input('email');
@@ -65,7 +65,7 @@ class AuthController extends Controller
                     'avatar_url' => $avatarUrl,
                     'status' => UserStatus::ACTIVE,
                     'last_login' => now(),
-                    'password' => Hash::make(Str::random(32)), 
+                    'password' => Hash::make(Str::random(32)),
                 ]);
             } else {
                 // Link the Firebase UID if they originally registered via password but are now using Google
@@ -110,7 +110,7 @@ class AuthController extends Controller
             'password' => 'required|string|min:8|confirmed',
         ]);
 
-        try {
+        // try {
             DB::beginTransaction();
 
             $companyId = IdGeneratorService::generateId('CMP');
@@ -148,13 +148,13 @@ class AuthController extends Controller
                 'user' => $user,
                 'company' => $company
             ], 201);
-        } catch (Exception $e) {
+        // } catch (Exception $e) {
             DB::rollBack();
-            return response()->json([
-                'error' => 'Registration Failed',
-                'message' => 'An error occurred while provisioning your corporate workspace accounts. Please try again.',
-            ], 500);
-        }
+        //     return response()->json([
+        //         'error' => 'Registration Failed',
+        //         'message' => 'An error occurred while provisioning your corporate workspace accounts. Please try again.',
+        //     ], 500);
+        // }
     }
 
     public function sendResetLink(Request $request): JsonResponse
@@ -204,7 +204,7 @@ class AuthController extends Controller
         $request->validate([
             'token' => 'required|string',
             'email' => 'required|email|exists:users,email',
-            'password' => 'required|string|min:8|confirmed',
+            'password' => 'required|string|min:8',
         ]);
 
         $email = $request->input('email');

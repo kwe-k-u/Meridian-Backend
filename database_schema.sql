@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS subscription_tiers (
     price_yearly INT,
     currency VARCHAR(3) DEFAULT 'GHS',
     max_employees INT,
-    max_projects INT,
+    max_trips INT,
     is_active BOOLEAN DEFAULT TRUE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -198,15 +198,15 @@ CREATE TABLE IF NOT EXISTS customers (
 );
 
 -- =============================================
--- PROJECTS TABLE
--- A project represents a traveller request that can have multiple trip itineraries
+-- TRIPS TABLE
+-- A trip represents a traveller request that can have multiple itinerary plans
 -- =============================================
 
-CREATE TABLE IF NOT EXISTS projects (
-    project_id VARCHAR(20) PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS trips (
+    trip_id VARCHAR(20) PRIMARY KEY,
     company_id VARCHAR(20) NOT NULL,
     created_by VARCHAR(20),
-    project_name VARCHAR(200) NOT NULL,
+    trip_name VARCHAR(200) NOT NULL,
     description TEXT,
     start_date DATE,
     end_date DATE,
@@ -220,16 +220,16 @@ CREATE TABLE IF NOT EXISTS projects (
 
 
 -- =============================================
--- PROJECT PAYMENTS TABLE
--- Tracks payments made by customers against a project
+-- TRIP PAYMENTS TABLE
+-- Tracks payments made by customers against a trip
 -- =============================================
 
-CREATE TABLE IF NOT EXISTS project_payments (
+CREATE TABLE IF NOT EXISTS trip_payments (
     transaction_id VARCHAR(20) PRIMARY KEY,
-    project_id VARCHAR(20) NOT NULL,
+    trip_id VARCHAR(20) NOT NULL,
     notes TEXT,
     FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE,
-    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE RESTRICT
+    FOREIGN KEY (trip_id) REFERENCES trips(trip_id) ON DELETE RESTRICT
 );
 
 -- =============================================
@@ -246,66 +246,66 @@ CREATE TABLE IF NOT EXISTS destinations (
 );
 
 -- =============================================
--- TRIPS TABLE
--- Trip itineraries created under a project
+-- ITINERARY TABLE
+-- Itinerary plans created under a trip
 -- =============================================
 
-CREATE TABLE IF NOT EXISTS trips (
-    trip_id VARCHAR(20) PRIMARY KEY,
-    project_id VARCHAR(20) NOT NULL,
+CREATE TABLE IF NOT EXISTS itinerary (
+    itinerary_id VARCHAR(20) PRIMARY KEY,
+    trip_id VARCHAR(20) NOT NULL,
     created_by VARCHAR(20),
-    trip_name VARCHAR(200) NOT NULL,
+    itinerary_name VARCHAR(200) NOT NULL,
     description TEXT,
     start_date DATE,
     end_date DATE,
     status ENUM('draft', 'planning', 'confirmed', 'in_progress', 'completed', 'cancelled') DEFAULT 'draft',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+    FOREIGN KEY (trip_id) REFERENCES trips(trip_id) ON DELETE CASCADE,
     FOREIGN KEY (created_by) REFERENCES users(user_id) ON DELETE SET NULL
 );
 
 -- =============================================
--- TRIP DAYS TABLE
--- Daily itinerary for each trip
+-- ITINERARY DAYS TABLE
+-- Daily itinerary for each itinerary
 -- =============================================
 
-CREATE TABLE IF NOT EXISTS trip_days (
-    trip_day_id VARCHAR(20) PRIMARY KEY,
-    trip_id VARCHAR(20) NOT NULL,
+CREATE TABLE IF NOT EXISTS itinerary_days (
+    itinerary_day_id VARCHAR(20) PRIMARY KEY,
+    itinerary_id VARCHAR(20) NOT NULL,
     day_number INT NOT NULL,
     date DATE,
     title VARCHAR(200),
     description TEXT,
     location VARCHAR(200),
-    FOREIGN KEY (trip_id) REFERENCES trips(trip_id) ON DELETE CASCADE
+    FOREIGN KEY (itinerary_id) REFERENCES itinerary(itinerary_id) ON DELETE CASCADE
 );
 
 -- =============================================
--- TRIP DAY DESTINATIONS TABLE
--- Links destinations to specific trip days with cost and activities
+-- ITINERARY DAY DESTINATIONS TABLE
+-- Links destinations to specific itinerary days with cost and activities
 -- =============================================
 
-CREATE TABLE IF NOT EXISTS trip_day_destinations (
-    trip_day_id VARCHAR(20) NOT NULL,
+CREATE TABLE IF NOT EXISTS itinerary_day_destinations (
+    itinerary_day_id VARCHAR(20) NOT NULL,
     destination_id VARCHAR(20) NOT NULL,
     cost VARCHAR(50),
     currency VARCHAR(3) DEFAULT 'GHS',
     activities TEXT,
     booking_url VARCHAR(500),
-    PRIMARY KEY (trip_day_id, destination_id),
-    FOREIGN KEY (trip_day_id) REFERENCES trip_days(trip_day_id) ON DELETE CASCADE,
+    PRIMARY KEY (itinerary_day_id, destination_id),
+    FOREIGN KEY (itinerary_day_id) REFERENCES itinerary_days(itinerary_day_id) ON DELETE CASCADE,
     FOREIGN KEY (destination_id) REFERENCES destinations(destination_id) ON DELETE RESTRICT
 );
 
 -- =============================================
--- TRIP FLIGHTS TABLE
--- Flights booked for a trip
+-- ITINERARY FLIGHTS TABLE
+-- Flights booked for an itinerary
 -- =============================================
 
-CREATE TABLE IF NOT EXISTS trip_flights (
+CREATE TABLE IF NOT EXISTS itinerary_flights (
     flight_id VARCHAR(20) PRIMARY KEY,
-    trip_id VARCHAR(20) NOT NULL,
+    itinerary_id VARCHAR(20) NOT NULL,
     airline VARCHAR(100),
     flight_number VARCHAR(20),
     departure_airport VARCHAR(100),
@@ -319,17 +319,17 @@ CREATE TABLE IF NOT EXISTS trip_flights (
     status ENUM('pending', 'booked', 'confirmed', 'cancelled') DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (trip_id) REFERENCES trips(trip_id) ON DELETE CASCADE
+    FOREIGN KEY (itinerary_id) REFERENCES itinerary(itinerary_id) ON DELETE CASCADE
 );
 
 -- =============================================
--- TRIP ACCOMMODATION TABLE
--- Accommodation booked for a trip
+-- ITINERARY ACCOMMODATION TABLE
+-- Accommodation booked for an itinerary
 -- =============================================
 
-CREATE TABLE IF NOT EXISTS trip_accommodation (
+CREATE TABLE IF NOT EXISTS itinerary_accommodation (
     accommodation_id VARCHAR(20) PRIMARY KEY,
-    trip_id VARCHAR(20) NOT NULL,
+    itinerary_id VARCHAR(20) NOT NULL,
     accommodation_name VARCHAR(200) NOT NULL,
     address VARCHAR(500),
     check_in_date DATE,
@@ -342,32 +342,32 @@ CREATE TABLE IF NOT EXISTS trip_accommodation (
     status ENUM('pending', 'booked', 'confirmed', 'cancelled') DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (trip_id) REFERENCES trips(trip_id) ON DELETE CASCADE
+    FOREIGN KEY (itinerary_id) REFERENCES itinerary(itinerary_id) ON DELETE CASCADE
 );
 
 -- =============================================
--- PROJECT-CUSTOMER LINK TABLE
--- Links customers to the project (traveller request)
+-- TRIP-CUSTOMER LINK TABLE
+-- Links customers to the trip (traveller request)
 -- =============================================
 
-CREATE TABLE IF NOT EXISTS project_customers (
-    project_id VARCHAR(20) NOT NULL,
+CREATE TABLE IF NOT EXISTS trip_customers (
+    trip_id VARCHAR(20) NOT NULL,
     customer_id VARCHAR(20) NOT NULL,
     role ENUM('primary', 'companion') DEFAULT 'primary',
     added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (project_id, customer_id),
-    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+    PRIMARY KEY (trip_id, customer_id),
+    FOREIGN KEY (trip_id) REFERENCES trips(trip_id) ON DELETE CASCADE,
     FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON DELETE CASCADE
 );
 
 -- =============================================
 -- CALLS TABLE
--- Online meetings held for a project
+-- Online meetings held for a trip
 -- =============================================
 
 CREATE TABLE IF NOT EXISTS calls (
     call_id VARCHAR(20) PRIMARY KEY,
-    project_id VARCHAR(20) NOT NULL,
+    trip_id VARCHAR(20) NOT NULL,
     organized_by VARCHAR(20),
     title VARCHAR(200),
     started_at DATETIME,
@@ -377,7 +377,7 @@ CREATE TABLE IF NOT EXISTS calls (
     transcript LONGTEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+    FOREIGN KEY (trip_id) REFERENCES trips(trip_id) ON DELETE CASCADE,
     FOREIGN KEY (organized_by) REFERENCES users(user_id) ON DELETE SET NULL
 );
 
@@ -407,18 +407,18 @@ CREATE INDEX idx_invitations_email ON invitations(email);
 CREATE INDEX idx_invitations_status ON invitations(status);
 CREATE INDEX idx_customers_company ON customers(company_id);
 CREATE INDEX idx_customers_email ON customers(email);
-CREATE INDEX idx_trips_status ON trips(status);
+CREATE INDEX idx_itinerary_status ON itinerary(status);
 
-CREATE INDEX idx_trip_days_trip ON trip_days(trip_id);
-CREATE INDEX idx_trip_flights_trip ON trip_flights(trip_id);
-CREATE INDEX idx_trip_accommodation_trip ON trip_accommodation(trip_id);
-CREATE INDEX idx_trip_day_destinations_day ON trip_day_destinations(trip_day_id);
-CREATE INDEX idx_trip_day_destinations_dest ON trip_day_destinations(destination_id);
-CREATE INDEX idx_projects_company ON projects(company_id);
-CREATE INDEX idx_projects_status ON projects(status);
-CREATE INDEX idx_project_customers_project ON project_customers(project_id);
-CREATE INDEX idx_project_customers_customer ON project_customers(customer_id);
-CREATE INDEX idx_calls_project ON calls(project_id);
+CREATE INDEX idx_itinerary_days_itinerary ON itinerary_days(itinerary_id);
+CREATE INDEX idx_itinerary_flights_itinerary ON itinerary_flights(itinerary_id);
+CREATE INDEX idx_itinerary_accommodation_itinerary ON itinerary_accommodation(itinerary_id);
+CREATE INDEX idx_itinerary_day_destinations_day ON itinerary_day_destinations(itinerary_day_id);
+CREATE INDEX idx_itinerary_day_destinations_dest ON itinerary_day_destinations(destination_id);
+CREATE INDEX idx_trips_company ON trips(company_id);
+CREATE INDEX idx_trips_status ON trips(status);
+CREATE INDEX idx_trip_customers_trip ON trip_customers(trip_id);
+CREATE INDEX idx_trip_customers_customer ON trip_customers(customer_id);
+CREATE INDEX idx_calls_trip ON calls(trip_id);
 CREATE INDEX idx_call_action_items_call ON call_action_items(call_id);
 CREATE INDEX idx_admins_user ON admins(user_id);
 CREATE INDEX idx_company_subscriptions_company ON company_subscriptions(company_id);
@@ -427,7 +427,7 @@ CREATE INDEX idx_transactions_status ON transactions(status);
 CREATE INDEX idx_transactions_reference ON transactions(transaction_reference(191));
 CREATE INDEX idx_subscription_payments_sub ON subscription_payments(subscription_id);
 CREATE INDEX idx_subscription_payments_company ON subscription_payments(company_id);
-CREATE INDEX idx_project_payments_project ON project_payments(project_id);
+CREATE INDEX idx_trip_payments_trip ON trip_payments(trip_id);
 
 -- =============================================
 -- STORED PROCEDURES
@@ -691,37 +691,99 @@ BEGIN
     ORDER BY created_at DESC;
 END //
 
--- Create a new trip under a project
+-- =============================================
+-- TRIP PROCEDURES
+-- =============================================
+
+-- Create a new trip (traveller request)
 DROP PROCEDURE IF EXISTS create_trip //
 
 CREATE PROCEDURE create_trip(
-    IN p_project_id VARCHAR(20),
+    IN p_company_id VARCHAR(20),
     IN p_created_by VARCHAR(20),
     IN p_trip_name VARCHAR(200),
     IN p_description TEXT,
     IN p_start_date DATE,
-    IN p_end_date DATE
+    IN p_end_date DATE,
+    IN p_budget VARCHAR(50)
 )
 BEGIN
     DECLARE v_trip_id VARCHAR(20);
     SET v_trip_id = generate_id('TRP');
 
-    INSERT INTO trips (
-        trip_id, project_id, created_by, trip_name, description,
-        start_date, end_date
-    ) VALUES (
-        v_trip_id, p_project_id, p_created_by, p_trip_name, p_description,
-        p_start_date, p_end_date
-    );
+    INSERT INTO trips (trip_id, company_id, created_by, trip_name, description, start_date, end_date, budget)
+    VALUES (v_trip_id, p_company_id, p_created_by, p_trip_name, p_description, p_start_date, p_end_date, p_budget);
 
     SELECT v_trip_id AS trip_id;
 END //
 
--- Add a day to a trip itinerary
-DROP PROCEDURE IF EXISTS add_trip_day //
+-- Get all trips for a company
+DROP PROCEDURE IF EXISTS get_company_trips //
 
-CREATE PROCEDURE add_trip_day(
+CREATE PROCEDURE get_company_trips(IN p_company_id VARCHAR(20))
+BEGIN
+    SELECT *
+    FROM trips
+    WHERE company_id = p_company_id
+    ORDER BY created_at DESC;
+END //
+
+-- Get full trip details with itineraries and customers
+DROP PROCEDURE IF EXISTS get_trip_details //
+
+CREATE PROCEDURE get_trip_details(IN p_trip_id VARCHAR(20))
+BEGIN
+    -- Trip header
+    SELECT * FROM trips WHERE trip_id = p_trip_id;
+
+    -- Itineraries under this trip
+    SELECT * FROM itinerary WHERE trip_id = p_trip_id ORDER BY start_date;
+
+    -- Customers linked to this trip
+    SELECT c.*, tc.role, tc.added_at
+    FROM customers c
+    JOIN trip_customers tc ON c.customer_id = tc.customer_id
+    WHERE tc.trip_id = p_trip_id;
+
+    -- Calls for this trip
+    SELECT * FROM calls WHERE trip_id = p_trip_id ORDER BY started_at;
+END //
+
+-- =============================================
+-- ITINERARY PROCEDURES
+-- =============================================
+
+-- Create a new itinerary under a trip
+DROP PROCEDURE IF EXISTS create_itinerary //
+
+CREATE PROCEDURE create_itinerary(
     IN p_trip_id VARCHAR(20),
+    IN p_created_by VARCHAR(20),
+    IN p_itinerary_name VARCHAR(200),
+    IN p_description TEXT,
+    IN p_start_date DATE,
+    IN p_end_date DATE
+)
+BEGIN
+    DECLARE v_itinerary_id VARCHAR(20);
+    SET v_itinerary_id = generate_id('ITN');
+
+    INSERT INTO itinerary (
+        itinerary_id, trip_id, created_by, itinerary_name, description,
+        start_date, end_date
+    ) VALUES (
+        v_itinerary_id, p_trip_id, p_created_by, p_itinerary_name, p_description,
+        p_start_date, p_end_date
+    );
+
+    SELECT v_itinerary_id AS itinerary_id;
+END //
+
+-- Add a day to an itinerary
+DROP PROCEDURE IF EXISTS add_itinerary_day //
+
+CREATE PROCEDURE add_itinerary_day(
+    IN p_itinerary_id VARCHAR(20),
     IN p_day_number INT,
     IN p_date DATE,
     IN p_title VARCHAR(200),
@@ -729,21 +791,20 @@ CREATE PROCEDURE add_trip_day(
     IN p_location VARCHAR(200)
 )
 BEGIN
-    DECLARE v_trip_day_id VARCHAR(20);
-    SET v_trip_day_id = generate_id('TPD');
-    -- SELECT generate_id('TPD') INTO v_trip_day_id;
+    DECLARE v_itinerary_day_id VARCHAR(20);
+    SET v_itinerary_day_id = generate_id('ITD');
 
-    INSERT INTO trip_days (trip_day_id, trip_id, day_number, `date`, title, description, location)
-    VALUES (v_trip_day_id, p_trip_id, p_day_number, p_date, p_title, p_description, p_location);
+    INSERT INTO itinerary_days (itinerary_day_id, itinerary_id, day_number, `date`, title, description, location)
+    VALUES (v_itinerary_day_id, p_itinerary_id, p_day_number, p_date, p_title, p_description, p_location);
 
-    SELECT v_trip_day_id AS trip_day_id;
+    SELECT v_itinerary_day_id AS itinerary_day_id;
 END //
 
--- Add a flight to a trip
-DROP PROCEDURE IF EXISTS add_trip_flight //
+-- Add a flight to an itinerary
+DROP PROCEDURE IF EXISTS add_itinerary_flight //
 
-CREATE PROCEDURE add_trip_flight(
-    IN p_trip_id VARCHAR(20),
+CREATE PROCEDURE add_itinerary_flight(
+    IN p_itinerary_id VARCHAR(20),
     IN p_airline VARCHAR(100),
     IN p_flight_number VARCHAR(20),
     IN p_departure_airport VARCHAR(100),
@@ -759,22 +820,22 @@ BEGIN
     DECLARE v_flight_id VARCHAR(20);
     SET v_flight_id = generate_id('FLT');
 
-    INSERT INTO trip_flights (
-        flight_id, trip_id, airline, flight_number, departure_airport,
+    INSERT INTO itinerary_flights (
+        flight_id, itinerary_id, airline, flight_number, departure_airport,
         arrival_airport, departure_datetime, arrival_datetime, cost, currency, booking_reference, booking_url
     ) VALUES (
-        v_flight_id, p_trip_id, p_airline, p_flight_number, p_departure_airport,
+        v_flight_id, p_itinerary_id, p_airline, p_flight_number, p_departure_airport,
         p_arrival_airport, p_departure_datetime, p_arrival_datetime, p_cost, COALESCE(p_currency, 'GHS'), p_booking_reference, p_booking_url
     );
 
     SELECT v_flight_id AS flight_id;
 END //
 
--- Add accommodation to a trip
-DROP PROCEDURE IF EXISTS add_trip_accommodation //
+-- Add accommodation to an itinerary
+DROP PROCEDURE IF EXISTS add_itinerary_accommodation //
 
-CREATE PROCEDURE add_trip_accommodation(
-    IN p_trip_id VARCHAR(20),
+CREATE PROCEDURE add_itinerary_accommodation(
+    IN p_itinerary_id VARCHAR(20),
     IN p_accommodation_name VARCHAR(200),
     IN p_address VARCHAR(500),
     IN p_check_in_date DATE,
@@ -788,22 +849,22 @@ BEGIN
     DECLARE v_accommodation_id VARCHAR(20);
     SET v_accommodation_id = generate_id('ACC');
 
-    INSERT INTO trip_accommodation (
-        accommodation_id, trip_id, accommodation_name, address,
+    INSERT INTO itinerary_accommodation (
+        accommodation_id, itinerary_id, accommodation_name, address,
         check_in_date, check_out_date, room_type, cost, currency, booking_reference
     ) VALUES (
-        v_accommodation_id, p_trip_id, p_accommodation_name, p_address,
+        v_accommodation_id, p_itinerary_id, p_accommodation_name, p_address,
         p_check_in_date, p_check_out_date, p_room_type, p_cost, COALESCE(p_currency, 'GHS'), p_booking_reference
     );
 
     SELECT v_accommodation_id AS accommodation_id;
 END //
 
--- Link a destination to a trip day
-DROP PROCEDURE IF EXISTS add_destination_to_trip_day //
+-- Link a destination to an itinerary day
+DROP PROCEDURE IF EXISTS add_destination_to_itinerary_day //
 
-CREATE PROCEDURE add_destination_to_trip_day(
-    IN p_trip_day_id VARCHAR(20),
+CREATE PROCEDURE add_destination_to_itinerary_day(
+    IN p_itinerary_day_id VARCHAR(20),
     IN p_destination_id VARCHAR(20),
     IN p_cost VARCHAR(50),
     IN p_currency VARCHAR(3),
@@ -811,109 +872,51 @@ CREATE PROCEDURE add_destination_to_trip_day(
     IN p_booking_url VARCHAR(500)
 )
 BEGIN
-    INSERT INTO trip_day_destinations (trip_day_id, destination_id, cost, currency, activities, booking_url)
-    VALUES (p_trip_day_id, p_destination_id, p_cost, COALESCE(p_currency, 'GHS'), p_activities, p_booking_url)
+    INSERT INTO itinerary_day_destinations (itinerary_day_id, destination_id, cost, currency, activities, booking_url)
+    VALUES (p_itinerary_day_id, p_destination_id, p_cost, COALESCE(p_currency, 'GHS'), p_activities, p_booking_url)
     ON DUPLICATE KEY UPDATE cost = p_cost, currency = COALESCE(p_currency, 'GHS'), activities = p_activities, booking_url = p_booking_url;
 END //
 
--- Get full trip details with itinerary, flights, accommodation, and customers
-DROP PROCEDURE IF EXISTS get_trip_details //
+-- Get full itinerary details with days, flights, accommodation, and customers
+DROP PROCEDURE IF EXISTS get_itinerary_details //
 
-CREATE PROCEDURE get_trip_details(IN p_trip_id VARCHAR(20))
+CREATE PROCEDURE get_itinerary_details(IN p_itinerary_id VARCHAR(20))
 BEGIN
-    -- Trip header with project info
-    SELECT t.*, p.project_name, p.project_id
-    FROM trips t
-    JOIN projects p ON t.project_id = p.project_id
-    WHERE t.trip_id = p_trip_id;
+    -- Itinerary header with trip info
+    SELECT i.*, t.trip_name, t.trip_id
+    FROM itinerary i
+    JOIN trips t ON i.trip_id = t.trip_id
+    WHERE i.itinerary_id = p_itinerary_id;
 
     -- Itinerary days
-    SELECT * FROM trip_days WHERE trip_id = p_trip_id ORDER BY day_number;
+    SELECT * FROM itinerary_days WHERE itinerary_id = p_itinerary_id ORDER BY day_number;
 
     -- Flights
-    SELECT * FROM trip_flights WHERE trip_id = p_trip_id ORDER BY departure_datetime;
+    SELECT * FROM itinerary_flights WHERE itinerary_id = p_itinerary_id ORDER BY departure_datetime;
 
     -- Accommodation
-    SELECT * FROM trip_accommodation WHERE trip_id = p_trip_id ORDER BY check_in_date;
+    SELECT * FROM itinerary_accommodation WHERE itinerary_id = p_itinerary_id ORDER BY check_in_date;
 
-    -- Customers on this trip (through project)
-    SELECT c.*, pc.role, pc.added_at
+    -- Customers on this itinerary (through trip)
+    SELECT c.*, tc.role, tc.added_at
     FROM customers c
-    JOIN project_customers pc ON c.customer_id = pc.customer_id
-    JOIN projects p ON pc.project_id = p.project_id
-    JOIN trips t ON t.project_id = p.project_id
-    WHERE t.trip_id = p_trip_id;
+    JOIN trip_customers tc ON c.customer_id = tc.customer_id
+    JOIN trips t ON tc.trip_id = t.trip_id
+    JOIN itinerary i ON i.trip_id = t.trip_id
+    WHERE i.itinerary_id = p_itinerary_id;
 END //
 
--- =============================================
--- PROJECT PROCEDURES
--- =============================================
+-- Link a customer to a trip
+DROP PROCEDURE IF EXISTS add_customer_to_trip //
 
--- Create a new project (traveller request)
-DROP PROCEDURE IF EXISTS create_project //
-
-CREATE PROCEDURE create_project(
-    IN p_company_id VARCHAR(20),
-    IN p_created_by VARCHAR(20),
-    IN p_project_name VARCHAR(200),
-    IN p_description TEXT,
-    IN p_start_date DATE,
-    IN p_end_date DATE,
-    IN p_budget VARCHAR(50)
-)
-BEGIN
-    DECLARE v_project_id VARCHAR(20);
-    SET v_project_id = generate_id('PRJ');
-
-    INSERT INTO projects (project_id, company_id, created_by, project_name, description, start_date, end_date, budget)
-    VALUES (v_project_id, p_company_id, p_created_by, p_project_name, p_description, p_start_date, p_end_date, p_budget);
-
-    SELECT v_project_id AS project_id;
-END //
-
--- Get all projects for a company
-DROP PROCEDURE IF EXISTS get_company_projects //
-
-CREATE PROCEDURE get_company_projects(IN p_company_id VARCHAR(20))
-BEGIN
-    SELECT *
-    FROM projects
-    WHERE company_id = p_company_id
-    ORDER BY created_at DESC;
-END //
-
--- Get full project details with trips and customers
-DROP PROCEDURE IF EXISTS get_project_details //
-
-CREATE PROCEDURE get_project_details(IN p_project_id VARCHAR(20))
-BEGIN
-    -- Project header
-    SELECT * FROM projects WHERE project_id = p_project_id;
-
-    -- Trips under this project
-    SELECT * FROM trips WHERE project_id = p_project_id ORDER BY start_date;
-
-    -- Customers linked to this project
-    SELECT c.*, pc.role, pc.added_at
-    FROM customers c
-    JOIN project_customers pc ON c.customer_id = pc.customer_id
-    WHERE pc.project_id = p_project_id;
-
-    -- Calls for this project
-    SELECT * FROM calls WHERE project_id = p_project_id ORDER BY started_at;
-END //
-
--- Link a customer to a project
-DROP PROCEDURE IF EXISTS add_customer_to_project //
-
-CREATE PROCEDURE add_customer_to_project(
-    IN p_project_id VARCHAR(20),
+CREATE PROCEDURE add_customer_to_trip(
+    IN p_trip_id VARCHAR(20),
     IN p_customer_id VARCHAR(20),
     IN p_role ENUM('primary', 'companion')
 )
 BEGIN
-    INSERT INTO project_customers (project_id, customer_id, role)
-    VALUES (p_project_id, p_customer_id, p_role)
+    INSERT INTO trip_customers (trip_id, customer_id, role)
+    VALUES (p_trip_id, p_customer_id, p_role)
     ON DUPLICATE KEY UPDATE role = p_role;
 END //
 
@@ -921,11 +924,11 @@ END //
 -- CALL PROCEDURES
 -- =============================================
 
--- Schedule or log a call for a project
+-- Schedule or log a call for a trip
 DROP PROCEDURE IF EXISTS schedule_call //
 
 CREATE PROCEDURE schedule_call(
-    IN p_project_id VARCHAR(20),
+    IN p_trip_id VARCHAR(20),
     IN p_organized_by VARCHAR(20),
     IN p_title VARCHAR(200),
     IN p_started_at DATETIME,
@@ -935,8 +938,8 @@ BEGIN
     DECLARE v_call_id VARCHAR(20);
     SET v_call_id = generate_id('CAL');
 
-    INSERT INTO calls (call_id, project_id, organized_by, title, started_at, meeting_link)
-    VALUES (v_call_id, p_project_id, p_organized_by, p_title, p_started_at, p_meeting_link);
+    INSERT INTO calls (call_id, trip_id, organized_by, title, started_at, meeting_link)
+    VALUES (v_call_id, p_trip_id, p_organized_by, p_title, p_started_at, p_meeting_link);
 
     SELECT v_call_id AS call_id;
 END //
@@ -1005,15 +1008,15 @@ BEGIN
     ORDER BY FIELD(status, 'pending', 'checked', 'archived'), created_at;
 END //
 
--- Get all calls for a project
-DROP PROCEDURE IF EXISTS get_project_calls //
+-- Get all calls for a trip
+DROP PROCEDURE IF EXISTS get_trip_calls //
 
-CREATE PROCEDURE get_project_calls(IN p_project_id VARCHAR(20))
+CREATE PROCEDURE get_trip_calls(IN p_trip_id VARCHAR(20))
 BEGIN
     SELECT c.*, u.display_name AS organized_by_name
     FROM calls c
     LEFT JOIN users u ON c.organized_by = u.user_id
-    WHERE c.project_id = p_project_id
+    WHERE c.trip_id = p_trip_id
     ORDER BY c.started_at DESC;
 END //
 
@@ -1050,7 +1053,7 @@ BEGIN
         cs.status AS subscription_status,
         cs.end_date AS subscription_end,
         (SELECT COUNT(*) FROM user_company uc WHERE uc.company_id = c.company_id) AS employee_count,
-        (SELECT COUNT(*) FROM projects p WHERE p.company_id = c.company_id) AS project_count
+        (SELECT COUNT(*) FROM trips t WHERE t.company_id = c.company_id) AS trip_count
     FROM companies c
     LEFT JOIN company_subscriptions cs ON c.company_id = cs.company_id AND cs.status = 'active'
     LEFT JOIN subscription_tiers st ON cs.tier_id = st.tier_id
@@ -1083,13 +1086,13 @@ BEGIN
     SELECT
         t.*,
         c.company_name,
-        'project' AS type,
-        p.project_name AS tier_name,
+        'trip' AS type,
+        tr.trip_name AS tier_name,
         NULL AS initiated_by_name
     FROM transactions t
-    JOIN project_payments pp ON t.transaction_id = pp.transaction_id
-    JOIN projects p ON pp.project_id = p.project_id
-    JOIN companies c ON p.company_id = c.company_id
+    JOIN trip_payments tp ON t.transaction_id = tp.transaction_id
+    JOIN trips tr ON tp.trip_id = tr.trip_id
+    JOIN companies c ON tr.company_id = c.company_id
     WHERE (p_status IS NULL OR t.status = p_status)
 
     ORDER BY created_at DESC;
@@ -1143,11 +1146,11 @@ BEGIN
     SELECT v_transaction_id AS transaction_id;
 END //
 
--- Record a project payment from a customer
-DROP PROCEDURE IF EXISTS record_project_payment //
+-- Record a trip payment from a customer
+DROP PROCEDURE IF EXISTS record_trip_payment //
 
-CREATE PROCEDURE record_project_payment(
-    IN p_project_id VARCHAR(20),
+CREATE PROCEDURE record_trip_payment(
+    IN p_trip_id VARCHAR(20),
     IN p_amount INT,
     IN p_currency VARCHAR(3),
     IN p_payment_method VARCHAR(50),
@@ -1162,8 +1165,8 @@ BEGIN
     INSERT INTO transactions (transaction_id, amount, currency, payment_method, transaction_reference, status, paid_at)
     VALUES (v_transaction_id, p_amount, COALESCE(p_currency, 'GHS'), p_payment_method, p_transaction_reference, p_status, IF(p_status = 'completed', NOW(), NULL));
 
-    INSERT INTO project_payments (transaction_id, project_id, notes)
-    VALUES (v_transaction_id, p_project_id, p_notes);
+    INSERT INTO trip_payments (transaction_id, trip_id, notes)
+    VALUES (v_transaction_id, p_trip_id, p_notes);
 
     SELECT v_transaction_id AS transaction_id;
 END //
