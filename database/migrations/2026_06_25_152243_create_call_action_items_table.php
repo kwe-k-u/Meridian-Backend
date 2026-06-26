@@ -12,7 +12,7 @@ return new class extends Migration
             $table->string('action_item_id', 20)->primary();
             $table->string('call_id', 20);
             $table->text('description');
-            $table->string('status', 20);
+            $table->string('status', 20)->default('pending');
             $table->timestamps();
 
             $table->foreign('call_id')->references('call_id')->on('calls')->cascadeOnDelete();
