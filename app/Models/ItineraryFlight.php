@@ -7,6 +7,15 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Model for the `itinerary_flights` table.
+ *
+ * Purpose: Represents a flight booking within an itinerary, including departure/arrival details and cost.
+ *
+ * @property string $flight_id Unique identifier for the flight record.
+ * @property string $itinerary_id Foreign key to the associated itinerary.
+ * @property FlightStatus $status Current booking status (e.g., pending, confirmed, cancelled).
+ */
 class ItineraryFlight extends Model
 {
     use HasFactory;

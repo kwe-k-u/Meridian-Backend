@@ -8,6 +8,15 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
+/**
+ * Model for the `customers` table.
+ *
+ * Purpose: Represents an end-client traveler managed by a company and associated with trips.
+ *
+ * @property string $customer_id Unique identifier for the customer.
+ * @property string $company_id Foreign key to the owning company.
+ * @property CustomerStatus $status Current status (e.g., active, inactive).
+ */
 class Customer extends Model
 {
     use HasFactory;

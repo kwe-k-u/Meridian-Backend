@@ -7,6 +7,15 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Model for the `itinerary_accommodation` table.
+ *
+ * Purpose: Represents a hotel or accommodation booking within an itinerary.
+ *
+ * @property string $accommodation_id Unique identifier for the accommodation record.
+ * @property string $itinerary_id Foreign key to the associated itinerary.
+ * @property AccommodationStatus $status Current booking status (e.g., pending, confirmed, cancelled).
+ */
 class ItineraryAccommodation extends Model
 {
     use HasFactory;

@@ -12,18 +12,60 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rules\Enum;
 
+/**
+ * Manages financial transactions, subscription payments, and trip payments.
+ *
+ * Routes: /api/transactions, /api/transactions/subscription-payment, /api/transactions/trip-payment
+ */
 class TransactionController extends Controller
 {
-    public function index(): JsonResponse
+    // GET /api/transactions — Returns paginated list of transactions scoped to the user's companies.
+    public function index(Request $request): JsonResponse
     {
-        return response()->json(Transaction::paginate(15));
+        $companyIds = $request->user()->companies->pluck('company_id');
+
+        return response()->json(
+            Transaction::with(['tripPayment.trip', 'subscriptionPayment'])
+                ->whereIn('transaction_id', function ($q) use ($companyIds) {
+                    $q->select('transaction_id')
+                      ->from('trip_payments')
+                      ->whereIn('trip_id', function ($q2) use ($companyIds) {
+                          $q2->select('trip_id')->from('trips')->whereIn('company_id', $companyIds);
+                      });
+                })
+                ->orWhereIn('transaction_id', function ($q) use ($companyIds) {
+                    $q->select('transaction_id')
+                      ->from('subscription_payments')
+                      ->whereIn('company_id', $companyIds);
+                })
+                ->orderBy('created_at', 'desc')
+                ->paginate(15)
+        );
     }
 
-    public function show(Transaction $transaction): JsonResponse
+    // GET /api/transactions/{transaction} — Returns a single transaction with payment details (company-scoped).
+    public function show(Request $request, Transaction $transaction): JsonResponse
     {
-        return response()->json($transaction->load(['subscriptionPayment', 'tripPayment']));
+        $companyIds = $request->user()->companies->pluck('company_id');
+        $accessible = false;
+
+        if ($transaction->relationLoaded('tripPayment') || $transaction->tripPayment) {
+            $transaction->load('tripPayment.trip');
+            $tripCompanyId = optional($transaction->tripPayment->trip)->company_id;
+            $accessible = $tripCompanyId && in_array($tripCompanyId, $companyIds->toArray());
+        }
+        if (!$accessible && $transaction->subscriptionPayment) {
+            $accessible = in_array($transaction->subscriptionPayment->company_id, $companyIds->toArray());
+        }
+
+        if (!$accessible) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        return response()->json($transaction->load(['subscriptionPayment', 'tripPayment.trip']));
     }
 
+    // POST /api/transactions/subscription-payment — Records a subscription payment transaction in a DB transaction.
     public function recordSubscriptionPayment(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -62,6 +104,7 @@ class TransactionController extends Controller
         });
     }
 
+    // POST /api/transactions/trip-payment — Records a trip payment transaction in a DB transaction.
     public function recordTripPayment(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -98,8 +141,25 @@ class TransactionController extends Controller
         });
     }
 
+    // PUT /api/transactions/{transaction}/status — Updates a transaction's status (company-scoped).
     public function updateStatus(Request $request, Transaction $transaction): JsonResponse
     {
+        $companyIds = $request->user()->companies->pluck('company_id');
+        $accessible = false;
+
+        if ($transaction->tripPayment) {
+            $transaction->load('tripPayment.trip');
+            $tripCompanyId = optional($transaction->tripPayment->trip)->company_id;
+            $accessible = $tripCompanyId && in_array($tripCompanyId, $companyIds->toArray());
+        }
+        if (!$accessible && $transaction->subscriptionPayment) {
+            $accessible = in_array($transaction->subscriptionPayment->company_id, $companyIds->toArray());
+        }
+
+        if (!$accessible) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $validated = $request->validate([
             'status' => ['required', new Enum(TransactionStatus::class)],
         ]);

@@ -1,3 +1,4 @@
+{{-- Default Laravel welcome/landing page. Placeholder for the Meridian frontend. --}}
 <!DOCTYPE html>
 <html lang="{{ str_replace('_', '-', app()->getLocale()) }}">
     <head>

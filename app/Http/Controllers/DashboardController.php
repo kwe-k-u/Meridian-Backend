@@ -2,74 +2,95 @@
 
 namespace App\Http\Controllers;
 
-use App\Enums\TripStatus;
+use App\Enums\CallActionItemStatus;
+use App\Enums\TransactionStatus;
+use App\Models\CallActionItem;
+use App\Models\Transaction;
+use App\Models\Trip;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 
+/**
+ * Aggregates dashboard metrics (revenue, outstanding, refunds, tasks) for the authenticated user's companies.
+ *
+ * Routes: GET /api/dashboard
+ */
 class DashboardController extends Controller
 {
-    /**
-     * Return the following:
-     * - User infomation
-     * - User company info
-     * - Trips info
-     * - Revenue info ( Total revenue, outstanding, paid out refunds)
-     * - 
-     * .
-     */
+    // GET /api/dashboard — Returns aggregated revenue, outstanding, refund, trip, and task metrics for the user's companies.
     public function __invoke(Request $request)
     {
-        $latest_trips = [
-            [
-                'trip_id' => 'TRP_PSFSKLSFJ2121',
-                'trip_name' => 'Asante-Mensah Honeymoon',
-                'status' => TripStatus::IN_PROGRESS->value,
-                'start_date' => '2026-10-04',
-                'end_date' => '2026-10-14',
-            ],
-            [
-                'trip_id' => 'TRP_PSFSKLSFJ2122',
-                'trip_name' => 'Adjei Family Dubai',
-                'status' => TripStatus::PLANNING->value,
-                'start_date' => '2026-07-12',
-                'end_date' => '2026-07-19',
-            ],
-            [
-                'trip_id' => 'TRP_PSFSKLSFJ2123',
-                'trip_name' => 'Owusu Corporate Retreat',
-                'status' => TripStatus::BOOKED->value,
-                'start_date' => '2026-08-02',
-                'end_date' => '2026-08-06',
-            ],
-            [
-                'trip_id' => 'TRP_PSFSKLSFJ2124',
-                'trip_name' => 'Boateng Anniversary',
-                'status' => TripStatus::INQUIRY->value,
-                'start_date' => '2026-09-09',
-                'end_date' => '2026-09-15',
-            ]
-        ];
+        $user = $request->user();
+        $companyIds = $user->companies->pluck('company_id');
+
+        $latestTrips = Trip::whereIn('company_id', $companyIds)
+            ->orderBy('created_at', 'desc')
+            ->take(4)
+            ->get(['trip_id', 'trip_name', 'status', 'start_date', 'end_date']);
+
+        $totalRevenue = Transaction::whereIn('transaction_id', function ($q) use ($companyIds) {
+            $q->select('trip_payments.transaction_id')
+              ->from('trip_payments')
+              ->join('trips', 'trips.trip_id', '=', 'trip_payments.trip_id')
+              ->whereIn('trips.company_id', $companyIds);
+        })->where('status', TransactionStatus::COMPLETED)->sum('amount');
+
+        $outstanding = Transaction::whereIn('transaction_id', function ($q) use ($companyIds) {
+            $q->select('trip_payments.transaction_id')
+              ->from('trip_payments')
+              ->join('trips', 'trips.trip_id', '=', 'trip_payments.trip_id')
+              ->whereIn('trips.company_id', $companyIds);
+        })->where('status', TransactionStatus::PENDING);
+
+        $refunds = Transaction::whereIn('transaction_id', function ($q) use ($companyIds) {
+            $q->select('trip_payments.transaction_id')
+              ->from('trip_payments')
+              ->join('trips', 'trips.trip_id', '=', 'trip_payments.trip_id')
+              ->whereIn('trips.company_id', $companyIds);
+        })->where('status', TransactionStatus::REFUNDED);
+
+        $paidOut = Transaction::whereIn('transaction_id', function ($q) use ($companyIds) {
+            $q->select('trip_payments.transaction_id')
+              ->from('trip_payments')
+              ->join('trips', 'trips.trip_id', '=', 'trip_payments.trip_id')
+              ->whereIn('trips.company_id', $companyIds);
+        })->whereIn('status', [TransactionStatus::COMPLETED, TransactionStatus::PENDING]);
+
+        $aiHandled = CallActionItem::whereIn('call_id', function ($q) use ($companyIds) {
+            $q->select('calls.call_id')
+              ->from('calls')
+              ->join('trips', 'trips.trip_id', '=', 'calls.trip_id')
+              ->whereIn('trips.company_id', $companyIds);
+        })->where('status', CallActionItemStatus::CHECKED)->count();
+
+        $pendingReview = CallActionItem::whereIn('call_id', function ($q) use ($companyIds) {
+            $q->select('calls.call_id')
+              ->from('calls')
+              ->join('trips', 'trips.trip_id', '=', 'calls.trip_id')
+              ->whereIn('trips.company_id', $companyIds);
+        })->where('status', CallActionItemStatus::PENDING)->count();
 
         return response()->json([
-            'user' => $request->user(),
+            'user' => $user,
             'revenue' => [
-                'amount' => 64300,
-                'previous_cmp' => 1.8,
+                'amount' => (float) $totalRevenue,
+                'previous_cmp' => 0,
             ],
             'outstanding' => [
-                'amount' => 64300,
-                'count' => 3,
+                'amount' => (float) $outstanding->sum('amount'),
+                'count' => $outstanding->count(),
             ],
             'paid_out' => [
-                'amount' => 64300,
-                'next_payout' => '2026-06-24',
+                'amount' => (float) $paidOut->sum('amount'),
+                'next_payout' => Carbon::now()->endOfMonth()->toDateString(),
             ],
             'refunds' => [
-                'amount' => 64300,
-                'count' => 1
+                'amount' => (float) $refunds->sum('amount'),
+                'count' => $refunds->count(),
             ],
-            'latest_trips' => $latest_trips,
-            'ai_handled_tasks' => 14,
-            'pending_review_tasks' => 3,
+            'latest_trips' => $latestTrips,
+            'ai_handled_tasks' => $aiHandled,
+            'pending_review_tasks' => $pendingReview,
         ]);
     }
 }

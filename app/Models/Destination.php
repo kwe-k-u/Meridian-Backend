@@ -6,6 +6,13 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
+/**
+ * Model for the `destinations` table.
+ *
+ * Purpose: Represents a travel destination or point of interest that can be linked to itinerary days.
+ *
+ * @property string $destination_id Unique identifier for the destination.
+ */
 class Destination extends Model
 {
     use HasFactory;

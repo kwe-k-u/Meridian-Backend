@@ -6,6 +6,16 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Model for the `subscription_payments` table.
+ *
+ * Purpose: Links a financial transaction to a company's subscription renewal, recording who initiated it.
+ *
+ * @property string $transaction_id Primary key; foreign key to the underlying transaction.
+ * @property string $subscription_id Foreign key to the company subscription being paid for.
+ * @property string $company_id Foreign key to the company making the payment.
+ * @property string $initiated_by Foreign key to the user who initiated the payment.
+ */
 class SubscriptionPayment extends Model
 {
     use HasFactory;

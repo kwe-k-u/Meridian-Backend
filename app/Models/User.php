@@ -12,6 +12,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Laravel\Sanctum\HasApiTokens;
 
 
+/**
+ * Model for the `users` table.
+ *
+ * Purpose: Represents an authenticated user account with Firebase authentication, capable of belonging to multiple companies.
+ *
+ * @property string $user_id Unique identifier for the user.
+ * @property string|null $firebase_uid Firebase authentication UID.
+ * @property UserStatus $status Account status (e.g., active, disabled).
+ */
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */

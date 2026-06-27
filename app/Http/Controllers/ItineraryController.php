@@ -10,20 +10,45 @@ use App\Models\ItineraryDay;
 use App\Models\ItineraryFlight;
 use App\Models\ItineraryAccommodation;
 use App\Models\ItineraryDayDestination;
+use App\Models\Trip;
 use App\Services\IdGeneratorService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\Enum;
 
+/**
+ * Manages trip itineraries including daily schedules, destinations, flights, and accommodation.
+ *
+ * Routes: /api/itineraries, /api/itineraries/{itinerary}/days, /api/itineraries/{itinerary}/flights, /api/itineraries/{itinerary}/accommodation
+ */
 class ItineraryController extends Controller
 {
-    public function index(): JsonResponse
+    // GET /api/itineraries — Returns paginated list of itineraries scoped to the user's companies.
+    public function index(Request $request): JsonResponse
     {
-        return response()->json(Itinerary::with(['trip', 'createdBy'])->paginate(15));
+        $companyIds = $request->user()->companies->pluck('company_id');
+
+        return response()->json(
+            Itinerary::with(['trip', 'createdBy'])
+                ->whereIn('trip_id', function ($q) use ($companyIds) {
+                    $q->select('trip_id')->from('trips')->whereIn('company_id', $companyIds);
+                })
+                ->paginate(15)
+        );
     }
 
+    // POST /api/itineraries — Creates a new itinerary for a trip (company-scoped).
     public function store(Request $request): JsonResponse
     {
+        $companyIds = $request->user()->companies->pluck('company_id');
+        $trip = Trip::whereIn('company_id', $companyIds)
+            ->where('trip_id', $request->trip_id)
+            ->first();
+
+        if (!$trip) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $validated = $request->validate([
             'trip_id' => 'required|string|exists:trips,trip_id',
             'created_by' => 'nullable|string|exists:users,user_id',
@@ -39,8 +64,18 @@ class ItineraryController extends Controller
         return response()->json($itinerary, 201);
     }
 
-    public function show(Itinerary $itinerary): JsonResponse
+    // GET /api/itineraries/{itinerary} — Returns a single itinerary with days, destinations, flights, and accommodation (company-scoped).
+    public function show(Request $request, Itinerary $itinerary): JsonResponse
     {
+        $companyIds = $request->user()->companies->pluck('company_id');
+        $trip = Trip::whereIn('company_id', $companyIds)
+            ->where('trip_id', $itinerary->trip_id)
+            ->first();
+
+        if (!$trip) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         return response()->json($itinerary->load([
             'trip',
             'createdBy',
@@ -50,8 +85,18 @@ class ItineraryController extends Controller
         ]));
     }
 
+    // PUT/PATCH /api/itineraries/{itinerary} — Updates itinerary details (company-scoped).
     public function update(Request $request, Itinerary $itinerary): JsonResponse
     {
+        $companyIds = $request->user()->companies->pluck('company_id');
+        $trip = Trip::whereIn('company_id', $companyIds)
+            ->where('trip_id', $itinerary->trip_id)
+            ->first();
+
+        if (!$trip) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $validated = $request->validate([
             'itinerary_name' => 'sometimes|required|string|max:200',
             'description' => 'nullable|string',
@@ -65,13 +110,23 @@ class ItineraryController extends Controller
         return response()->json($itinerary);
     }
 
-    public function destroy(Itinerary $itinerary): JsonResponse
+    // DELETE /api/itineraries/{itinerary} — Deletes an itinerary (company-scoped).
+    public function destroy(Request $request, Itinerary $itinerary): JsonResponse
     {
+        $companyIds = $request->user()->companies->pluck('company_id');
+        $trip = Trip::whereIn('company_id', $companyIds)
+            ->where('trip_id', $itinerary->trip_id)
+            ->first();
+
+        if (!$trip) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $itinerary->delete();
         return response()->json(null, 204);
     }
 
-    // Itinerary Days
+    // POST /api/itineraries/{itinerary}/days — Adds a day to an itinerary.
     public function addDay(Request $request, Itinerary $itinerary): JsonResponse
     {
         $validated = $request->validate([
@@ -89,6 +144,7 @@ class ItineraryController extends Controller
         return response()->json($day, 201);
     }
 
+    // PUT/PATCH /api/itineraries/days/{itineraryDay} — Updates an itinerary day.
     public function updateDay(Request $request, ItineraryDay $itineraryDay): JsonResponse
     {
         $validated = $request->validate([
@@ -104,13 +160,14 @@ class ItineraryController extends Controller
         return response()->json($itineraryDay);
     }
 
+    // DELETE /api/itineraries/days/{itineraryDay} — Removes an itinerary day.
     public function removeDay(ItineraryDay $itineraryDay): JsonResponse
     {
         $itineraryDay->delete();
         return response()->json(null, 204);
     }
 
-    // Itinerary Day Destinations
+    // POST /api/itineraries/days/{itineraryDay}/destinations — Attaches a destination to an itinerary day (upserts).
     public function addDestinationToDay(Request $request, ItineraryDay $itineraryDay): JsonResponse
     {
         $validated = $request->validate([
@@ -132,6 +189,7 @@ class ItineraryController extends Controller
         return response()->json($itineraryDay->load('destinations'), 200);
     }
 
+    // DELETE /api/itineraries/days/{itineraryDay}/destinations/{destinationId} — Removes a destination from an itinerary day.
     public function removeDestinationFromDay(ItineraryDay $itineraryDay, string $destinationId): JsonResponse
     {
         ItineraryDayDestination::where('itinerary_day_id', $itineraryDay->itinerary_day_id)
@@ -141,7 +199,7 @@ class ItineraryController extends Controller
         return response()->json(null, 204);
     }
 
-    // Itinerary Flights
+    // POST /api/itineraries/{itinerary}/flights — Adds a flight booking to an itinerary.
     public function addFlight(Request $request, Itinerary $itinerary): JsonResponse
     {
         $validated = $request->validate([
@@ -165,6 +223,7 @@ class ItineraryController extends Controller
         return response()->json($flight, 201);
     }
 
+    // PUT/PATCH /api/itineraries/flights/{itineraryFlight} — Updates a flight booking.
     public function updateFlight(Request $request, ItineraryFlight $itineraryFlight): JsonResponse
     {
         $validated = $request->validate([
@@ -186,13 +245,14 @@ class ItineraryController extends Controller
         return response()->json($itineraryFlight);
     }
 
+    // DELETE /api/itineraries/flights/{itineraryFlight} — Removes a flight booking.
     public function removeFlight(ItineraryFlight $itineraryFlight): JsonResponse
     {
         $itineraryFlight->delete();
         return response()->json(null, 204);
     }
 
-    // Itinerary Accommodation
+    // POST /api/itineraries/{itinerary}/accommodation — Adds accommodation to an itinerary.
     public function addAccommodation(Request $request, Itinerary $itinerary): JsonResponse
     {
         $validated = $request->validate([
@@ -215,6 +275,7 @@ class ItineraryController extends Controller
         return response()->json($accommodation, 201);
     }
 
+    // PUT/PATCH /api/itineraries/accommodation/{itineraryAccommodation} — Updates accommodation details.
     public function updateAccommodation(Request $request, ItineraryAccommodation $itineraryAccommodation): JsonResponse
     {
         $validated = $request->validate([
@@ -235,6 +296,7 @@ class ItineraryController extends Controller
         return response()->json($itineraryAccommodation);
     }
 
+    // DELETE /api/itineraries/accommodation/{itineraryAccommodation} — Removes accommodation from an itinerary.
     public function removeAccommodation(ItineraryAccommodation $itineraryAccommodation): JsonResponse
     {
         $itineraryAccommodation->delete();

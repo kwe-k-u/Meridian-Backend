@@ -6,6 +6,13 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
+/**
+ * Model for the `companies` table.
+ *
+ * Purpose: Represents a travel agency company that manages trips, customers, and subscriptions.
+ *
+ * @property string $company_id Unique identifier for the company.
+ */
 class Company extends Model
 {
     use HasFactory;

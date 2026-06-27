@@ -6,6 +6,14 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Model for the `trip_payments` table.
+ *
+ * Purpose: Links a financial transaction to a specific trip, optionally with notes.
+ *
+ * @property string $transaction_id Primary key; foreign key to the underlying transaction.
+ * @property string $trip_id Foreign key to the associated trip.
+ */
 class TripPayment extends Model
 {
     use HasFactory;

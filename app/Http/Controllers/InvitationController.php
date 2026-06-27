@@ -9,13 +9,20 @@ use Illuminate\Validation\Rules\Enum;
 use App\Enums\CompanyRole;
 use App\Enums\InvitationStatus;
 
+/**
+ * Manages company invitations sent to users by email.
+ *
+ * Routes: /api/invitations (resourceful)
+ */
 class InvitationController extends Controller
 {
+    // GET /api/invitations — Returns paginated list of invitations with company and inviter.
     public function index(): JsonResponse
     {
         return response()->json(Invitation::with(['company', 'inviter'])->paginate(15));
     }
 
+    // POST /api/invitations — Creates a new invitation.
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -33,11 +40,13 @@ class InvitationController extends Controller
         return response()->json($invitation, 201);
     }
 
+    // GET /api/invitations/{invitation} — Returns a single invitation with company and inviter.
     public function show(Invitation $invitation): JsonResponse
     {
         return response()->json($invitation->load(['company', 'inviter']));
     }
 
+    // PUT/PATCH /api/invitations/{invitation} — Updates invitation status or role.
     public function update(Request $request, Invitation $invitation): JsonResponse
     {
         $validated = $request->validate([
@@ -50,6 +59,7 @@ class InvitationController extends Controller
         return response()->json($invitation);
     }
 
+    // DELETE /api/invitations/{invitation} — Deletes an invitation.
     public function destroy(Invitation $invitation): JsonResponse
     {
         $invitation->delete();

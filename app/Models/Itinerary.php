@@ -8,6 +8,16 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * Model for the `itinerary` table.
+ *
+ * Purpose: Represents a trip itinerary plan containing daily schedules, flights, and accommodation bookings.
+ *
+ * @property string $itinerary_id Unique identifier for the itinerary.
+ * @property string $trip_id Foreign key to the associated trip.
+ * @property string $created_by Foreign key to the user who created the itinerary.
+ * @property ItineraryStatus $status Current status (e.g., draft, confirmed, cancelled).
+ */
 class Itinerary extends Model
 {
     use HasFactory;

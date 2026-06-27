@@ -7,6 +7,17 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * Model for the `calls` table.
+ *
+ * Purpose: Represents a planning call or meeting organized for a trip, including transcript and action items.
+ *
+ * @property string $call_id Unique identifier for the call.
+ * @property string $trip_id Foreign key to the associated trip.
+ * @property string $organized_by Foreign key to the user who organized the call.
+ * @property \Carbon\Carbon|null $started_at When the call started.
+ * @property \Carbon\Carbon|null $ended_at When the call ended.
+ */
 class Call extends Model
 {
     use HasFactory;

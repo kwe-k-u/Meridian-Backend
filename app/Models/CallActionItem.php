@@ -7,6 +7,15 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Model for the `call_action_items` table.
+ *
+ * Purpose: Tracks individual action items or to-dos that result from a call.
+ *
+ * @property string $action_item_id Unique identifier for the action item.
+ * @property string $call_id Foreign key to the associated call.
+ * @property CallActionItemStatus $status Current status of the action item (e.g., pending, completed).
+ */
 class CallActionItem extends Model
 {
     use HasFactory;

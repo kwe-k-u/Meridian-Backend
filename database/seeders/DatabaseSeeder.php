@@ -6,6 +6,10 @@ use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
+/**
+ * Main database seeder. Creates a test user and then delegates to
+ * DemoDataSeeder to populate the full demo dataset.
+ */
 class DatabaseSeeder extends Seeder
 {
     use WithoutModelEvents;
@@ -15,11 +19,11 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
-
         User::factory()->create([
-            'name' => 'Test User',
+            'display_name' => 'Test User',
             'email' => 'test@example.com',
         ]);
+
+        $this->call(DemoDataSeeder::class);
     }
 }

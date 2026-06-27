@@ -7,6 +7,15 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
+/**
+ * Model for the `itinerary_days` table.
+ *
+ * Purpose: Represents a single day within an itinerary, containing a schedule and linked destinations.
+ *
+ * @property string $itinerary_day_id Unique identifier for the itinerary day.
+ * @property string $itinerary_id Foreign key to the associated itinerary.
+ * @property int $day_number The sequential day number within the itinerary.
+ */
 class ItineraryDay extends Model
 {
     use HasFactory;

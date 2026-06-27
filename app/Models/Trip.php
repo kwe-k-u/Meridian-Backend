@@ -10,6 +10,16 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * Model for the `trips` table.
+ *
+ * Purpose: Central entity representing a travel trip/project created by a company, linking customers, itineraries, calls, and payments.
+ *
+ * @property string $trip_id Unique identifier for the trip.
+ * @property string $company_id Foreign key to the owning company.
+ * @property string $created_by Foreign key to the user who created the trip.
+ * @property TripStatus $status Current status (e.g., planning, confirmed, in_progress, completed).
+ */
 class Trip extends Model
 {
     use HasFactory;

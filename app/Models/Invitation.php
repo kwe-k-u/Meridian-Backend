@@ -8,6 +8,17 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Model for the `invitations` table.
+ *
+ * Purpose: Represents a pending invitation for a user to join a company with a specific role.
+ *
+ * @property string $token Primary key; unique token identifying the invitation.
+ * @property string $company_id Foreign key to the inviting company.
+ * @property string $invited_by Foreign key to the user who sent the invitation.
+ * @property InvitationStatus $status Current status (e.g., pending, accepted, expired).
+ * @property CompanyRole $role The role the invited user will receive upon acceptance.
+ */
 class Invitation extends Model
 {
     use HasFactory;

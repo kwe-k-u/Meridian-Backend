@@ -6,6 +6,14 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Model for the `trip_customers` pivot table.
+ *
+ * Purpose: Links customers to a trip and defines their role (e.g., lead traveler, companion) within that trip.
+ *
+ * @property string $trip_id Foreign key to the trip.
+ * @property string $customer_id Foreign key to the customer.
+ */
 class TripCustomer extends Model
 {
     use HasFactory;

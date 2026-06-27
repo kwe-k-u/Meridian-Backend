@@ -8,13 +8,20 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\Enum;
 use App\Enums\UserStatus;
 
+/**
+ * Handles CRUD operations for user accounts.
+ *
+ * Routes: /api/users (resourceful)
+ */
 class UserController extends Controller
 {
+    // GET /api/users — Returns paginated list of users with their companies.
     public function index(): JsonResponse
     {
         return response()->json(User::with('companies')->paginate(15));
     }
 
+    // POST /api/users — Creates a new user.
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -32,11 +39,13 @@ class UserController extends Controller
         return response()->json($user, 201);
     }
 
+    // GET /api/users/{user} — Returns a single user with their companies.
     public function show(User $user): JsonResponse
     {
         return response()->json($user->load('companies'));
     }
 
+    // PUT/PATCH /api/users/{user} — Updates a user's profile fields.
     public function update(Request $request, User $user): JsonResponse
     {
         $validated = $request->validate([
@@ -53,6 +62,7 @@ class UserController extends Controller
         return response()->json($user);
     }
 
+    // DELETE /api/users/{user} — Deletes a user.
     public function destroy(User $user): JsonResponse
     {
         $user->delete();

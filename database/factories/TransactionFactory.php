@@ -3,8 +3,6 @@
 namespace Database\Factories;
 
 use App\Models\Transaction;
-use App\Models\Company;
-use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 class TransactionFactory extends Factory
@@ -13,16 +11,14 @@ class TransactionFactory extends Factory
 
     public function definition(): array
     {
-        $company = Company::factory()->create();
-
         return [
-            'transaction_id' => 'TRX_' . strtoupper($this->faker->unique()->lexify('????????????')),
-            'company_id' => $company->company_id,
-            'user_id' => User::factory()->create()->user_id,
+            'transaction_id' => 'TXN_' . strtoupper($this->faker->unique()->lexify('????????????')),
             'amount' => $this->faker->randomFloat(2, 1, 1000),
-            'currency' => $this->faker->currencyCode,
-            'status' => 'pending',
-            'description' => $this->faker->optional()->sentence,
+            'currency' => $this->faker->randomElement(['GHS', 'USD', 'EUR']),
+            'payment_method' => $this->faker->randomElement(['card', 'bank_transfer', 'mobile_money', null]),
+            'transaction_reference' => $this->faker->optional()->uuid,
+            'status' => $this->faker->randomElement(['pending', 'completed', 'failed', 'refunded']),
+            'paid_at' => null,
         ];
     }
 }

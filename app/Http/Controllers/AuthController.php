@@ -15,8 +15,14 @@ use App\Models\Company;
 use App\Services\IdGeneratorService;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * Handles user authentication (login, Google sign-in), company registration, profile updates, and password reset flows.
+ *
+ * Routes: /api/auth/*
+ */
 class AuthController extends Controller
 {
+    // POST /api/auth/login — Authenticates a user via email/password or Google provider token. Returns a Bearer token.
     public function login(Request $request): JsonResponse
     {
         // 1. Check if this is a Google Sign-In attempt
@@ -99,6 +105,7 @@ class AuthController extends Controller
         ], 200);
     }
 
+    // POST /api/auth/register — Registers a new company with an owner user account in a DB transaction.
     public function registerCompany(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -110,7 +117,7 @@ class AuthController extends Controller
             'password' => 'required|string|min:8|confirmed',
         ]);
 
-        // try {
+        try {
             DB::beginTransaction();
 
             $companyId = IdGeneratorService::generateId('CMP');
@@ -148,15 +155,31 @@ class AuthController extends Controller
                 'user' => $user,
                 'company' => $company
             ], 201);
-        // } catch (Exception $e) {
+        } catch (Exception $e) {
             DB::rollBack();
-        //     return response()->json([
-        //         'error' => 'Registration Failed',
-        //         'message' => 'An error occurred while provisioning your corporate workspace accounts. Please try again.',
-        //     ], 500);
-        // }
+            return response()->json([
+                'error' => 'Registration Failed',
+                'message' => 'An error occurred while provisioning your corporate workspace accounts. Please try again.',
+            ], 500);
+        }
     }
 
+    // PUT /api/auth/profile — Updates the authenticated user's display name, phone, or avatar.
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'display_name' => 'sometimes|string|max:50',
+            'phone' => 'nullable|string|max:20',
+            'avatar_url' => 'nullable|string',
+        ]);
+
+        $user = $request->user();
+        $user->update($validated);
+
+        return response()->json($user);
+    }
+
+    // POST /api/auth/forgot-password — Sends a password reset link (stores bcrypt token) to the user's email.
     public function sendResetLink(Request $request): JsonResponse
     {
         $request->validate([
@@ -199,6 +222,7 @@ class AuthController extends Controller
         }
     }
 
+    // POST /api/auth/reset-password — Resets the user's password after validating the reset token and expiration.
     public function resetForgotPassword(Request $request): JsonResponse
     {
         $request->validate([

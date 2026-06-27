@@ -5,6 +5,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
+/**
+ * Model for the `itinerary_day_destinations` pivot table.
+ *
+ * Purpose: Links destinations to a specific itinerary day, storing per-destination cost, currency, activities, and booking URL.
+ *
+ * @property string $itinerary_day_id Foreign key to the itinerary day.
+ * @property string $destination_id Foreign key to the destination.
+ */
 class ItineraryDayDestination extends Model
 {
     use HasFactory;

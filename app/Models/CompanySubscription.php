@@ -7,6 +7,16 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * Model for the `company_subscriptions` table.
+ *
+ * Purpose: Records a company's subscription to a specific tier plan, including its start and end dates.
+ *
+ * @property string $subscription_id Unique identifier for the subscription record.
+ * @property string $company_id Foreign key to the subscribing company.
+ * @property string $tier_id Foreign key to the subscription tier.
+ * @property SubscriptionStatus $status Current status (e.g., active, expired, cancelled).
+ */
 class CompanySubscription extends Model
 {
     use HasFactory;

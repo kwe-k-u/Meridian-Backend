@@ -7,6 +7,14 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
+/**
+ * Model for the `transactions` table.
+ *
+ * Purpose: Represents a financial transaction record that can be linked to either a trip payment or a subscription payment.
+ *
+ * @property string $transaction_id Unique identifier for the transaction.
+ * @property TransactionStatus $status Current status (e.g., pending, completed, failed).
+ */
 class Transaction extends Model
 {
     use HasFactory;
@@ -27,9 +35,23 @@ class Transaction extends Model
     ];
 
     protected $casts = [
+        'amount' => 'float',
         'status' => TransactionStatus::class,
         'paid_at' => 'datetime',
     ];
+
+    protected $appends = ['client_name'];
+
+    public function getClientNameAttribute(): ?string
+    {
+        if ($this->relationLoaded('tripPayment') && $this->tripPayment) {
+            $trip = $this->tripPayment->trip;
+            if ($trip && $trip->relationLoaded('customers') && $trip->customers->isNotEmpty()) {
+                return $trip->customers->first()->first_name . ' ' . $trip->customers->first()->last_name;
+            }
+        }
+        return null;
+    }
 
     public function subscriptionPayment(): HasOne
     {
