@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Company extends Model
 {
@@ -27,5 +28,10 @@ class Company extends Model
     {
         return $this->belongsToMany(User::class, 'user_companies', 'company_id', 'user_id')
             ->withPivot(['role', 'is_default', 'is_enabled', 'joined_at']);
+    }
+
+    public function trips(): HasMany
+    {
+        return $this->hasMany(Trip::class);
     }
 }

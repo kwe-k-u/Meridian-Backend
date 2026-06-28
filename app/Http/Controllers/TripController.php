@@ -13,9 +13,16 @@ use Illuminate\Validation\Rules\Enum;
 
 class TripController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(Request $request, ?string $status = null): JsonResponse
     {
-        return response()->json(Trip::with(['company', 'createdBy'])->paginate(15));
+        $status = $status ?? $request->query('status');
+        $query = $request->user()->company->trips()->with(['company', 'createdBy']);
+        if (!empty($status)) {
+            $query->where('status', $status);
+        }
+
+        $trips = $query->paginate(15);
+        return response()->json($trips);
     }
 
     public function store(Request $request): JsonResponse

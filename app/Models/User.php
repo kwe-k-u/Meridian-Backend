@@ -6,6 +6,7 @@ namespace App\Models;
 use Database\Factories\UserFactory;
 use App\Enums\UserStatus;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -29,6 +30,7 @@ class User extends Authenticatable
         'display_name',
         'phone',
         'avatar_url',
+        'company_id',
         'status',
         'last_login',
         'password'
@@ -60,9 +62,7 @@ class User extends Authenticatable
         ];
     }
 
-    public function companies(): BelongsToMany
-    {
-        return $this->belongsToMany(Company::class, 'user_companies', 'user_id', 'company_id')
-            ->withPivot(['role', 'is_default', 'is_enabled', 'joined_at']);
+    public function company(): BelongsTo {
+        return $this->BelongsTo(Company::class, 'company_id', 'company_id');
     }
 }

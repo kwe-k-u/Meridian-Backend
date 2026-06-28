@@ -28,6 +28,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Trips (was projects)
     Route::prefix('trips')->group(function () {
         Route::get('/', [TripController::class, 'index']);
+        Route::get('/status/{status?}', [TripController::class, 'index']);
         Route::post('/', [TripController::class, 'store']);
         Route::get('/{trip}', [TripController::class, 'show']);
         Route::put('/{trip}', [TripController::class, 'update']);
