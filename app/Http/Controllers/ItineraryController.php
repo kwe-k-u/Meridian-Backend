@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\FlightStatus;
 use App\Enums\AccommodationStatus;
 use App\Enums\ItineraryStatus;
+use App\Helpers\UserHelper;
 use App\Models\Itinerary;
 use App\Models\ItineraryDay;
 use App\Models\ItineraryFlight;
@@ -26,12 +27,11 @@ class ItineraryController extends Controller
     // GET /api/itineraries — Returns paginated list of itineraries scoped to the user's companies.
     public function index(Request $request): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
-
+        $company = UserHelper::user_company($request);
         return response()->json(
             Itinerary::with(['trip', 'createdBy'])
-                ->whereIn('trip_id', function ($q) use ($companyIds) {
-                    $q->select('trip_id')->from('trips')->whereIn('company_id', $companyIds);
+                ->where('trip_id', function ($q) use ($company) {
+                    $q->select('trip_id')->from('trips')->where('company_id', $company->id);
                 })
                 ->paginate(15)
         );
@@ -40,8 +40,8 @@ class ItineraryController extends Controller
     // POST /api/itineraries — Creates a new itinerary for a trip (company-scoped).
     public function store(Request $request): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
-        $trip = Trip::whereIn('company_id', $companyIds)
+        $company = UserHelper::user_company($request);
+        $trip = Trip::where('company_id', $company->id)
             ->where('trip_id', $request->trip_id)
             ->first();
 
@@ -67,8 +67,8 @@ class ItineraryController extends Controller
     // GET /api/itineraries/{itinerary} — Returns a single itinerary with days, destinations, flights, and accommodation (company-scoped).
     public function show(Request $request, Itinerary $itinerary): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
-        $trip = Trip::whereIn('company_id', $companyIds)
+        $company = UserHelper::user_company($request);
+        $trip = Trip::where('company_id', $company->id)
             ->where('trip_id', $itinerary->trip_id)
             ->first();
 
@@ -88,8 +88,8 @@ class ItineraryController extends Controller
     // PUT/PATCH /api/itineraries/{itinerary} — Updates itinerary details (company-scoped).
     public function update(Request $request, Itinerary $itinerary): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
-        $trip = Trip::whereIn('company_id', $companyIds)
+        $company = UserHelper::user_company($request);
+        $trip = Trip::where('company_id', $company->id)
             ->where('trip_id', $itinerary->trip_id)
             ->first();
 

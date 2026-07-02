@@ -74,4 +74,9 @@ class User extends Authenticatable
         return $this->belongsToMany(Company::class, 'user_companies', 'user_id', 'company_id')
             ->withPivot(['role', 'is_default', 'is_enabled', 'joined_at']);
     }
+
+    public function active_company() {
+        $active_user_company = UserCompany::where('user_id', $this->user_id)->where('is_enabled', true)->first();
+        return Company::where('company_id', $active_user_company->company_id)->first();
+    }
 }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\TripCustomerRole;
 use App\Enums\TripStatus;
+use App\Helpers\UserHelper;
 use App\Models\Customer;
 use App\Models\Trip;
 use App\Services\IdGeneratorService;
@@ -21,7 +22,8 @@ class TripController extends Controller
     // GET /api/trips — Returns paginated list of trips with company and creator.
     public function index(): JsonResponse
     {
-        return response()->json(Trip::with(['company', 'createdBy'])->paginate(15));
+        $trips = UserHelper::user_company(request())->trips()->with(['company', 'createdBy'])->paginate(15);
+        return response()->json($trips);
     }
 
     // POST /api/trips — Creates a new trip.
@@ -34,7 +36,7 @@ class TripController extends Controller
             'description' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
-            'budget' => 'nullable|string|max:50',
+            'budget' => 'nullable|numeric|decimal:2|max:50',
             'status' => ['nullable', new Enum(TripStatus::class)],
         ]);
 
@@ -47,6 +49,14 @@ class TripController extends Controller
     // GET /api/trips/{trip} — Returns a single trip with all relations (company, customers, itineraries, calls, payments).
     public function show(Trip $trip): JsonResponse
     {
+        if (!$trip) {
+            return response()->json(['message' => 'Trip not found.'], 404);
+        }
+
+        if ($trip->company_id !== UserHelper::user_company(request())->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         return response()->json($trip->load([
             'company',
             'createdBy',
@@ -67,7 +77,7 @@ class TripController extends Controller
             'description' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
-            'budget' => 'nullable|string|max:50',
+            'budget' => 'nullable|numeric|decimal:2|max:50',
             'status' => ['nullable', new Enum(TripStatus::class)],
         ]);
 
