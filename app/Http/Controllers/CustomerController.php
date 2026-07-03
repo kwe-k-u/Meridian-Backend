@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\CustomerStatus;
+use App\Helpers\UserHelper;
 use App\Models\Customer;
 use App\Services\IdGeneratorService;
 use Illuminate\Http\JsonResponse;
@@ -19,11 +20,11 @@ class CustomerController extends Controller
     // GET /api/customers — Returns paginated list of customers scoped to the user's companies.
     public function index(Request $request): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
+        $company = UserHelper::user_company($request);
 
         return response()->json(
             Customer::with('company')
-                ->whereIn('company_id', $companyIds)
+                ->where('company_id', $company->company_id)
                 ->paginate(15)
         );
     }
@@ -31,7 +32,7 @@ class CustomerController extends Controller
     // POST /api/customers — Creates a new customer record within one of the user's companies.
     public function store(Request $request): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
+        $company = UserHelper::user_company($request);
 
         $validated = $request->validate([
             'company_id' => 'required|string|exists:companies,company_id',
@@ -46,7 +47,7 @@ class CustomerController extends Controller
             'status' => ['nullable', new Enum(CustomerStatus::class)],
         ]);
 
-        if (!in_array($validated['company_id'], $companyIds->toArray())) {
+        if ($validated['company_id'] == $company->company_id) {
             return response()->json(['message' => 'Unauthorized company.'], 403);
         }
 
@@ -59,9 +60,8 @@ class CustomerController extends Controller
     // GET /api/customers/{customer} — Returns a single customer with company and trips (company-scoped).
     public function show(Request $request, Customer $customer): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
-
-        if (!in_array($customer->company_id, $companyIds->toArray())) {
+        $company = UserHelper::user_company($request);
+        if (!$customer->company_id == $company->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
@@ -71,9 +71,9 @@ class CustomerController extends Controller
     // PUT/PATCH /api/customers/{customer} — Updates customer details (company-scoped).
     public function update(Request $request, Customer $customer): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
+        $company = UserHelper::user_company($request);
 
-        if (!in_array($customer->company_id, $companyIds->toArray())) {
+        if (!$customer->company_id == $company->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
@@ -97,9 +97,8 @@ class CustomerController extends Controller
     // DELETE /api/customers/{customer} — Deletes a customer record (company-scoped).
     public function destroy(Request $request, Customer $customer): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
-
-        if (!in_array($customer->company_id, $companyIds->toArray())) {
+        $company = UserHelper::user_company($request);
+        if (!$customer->company_id == $company->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
