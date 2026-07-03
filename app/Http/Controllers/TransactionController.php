@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Enums\TransactionStatus;
+use App\Helpers\TransactionHelper;
+use App\Helpers\UserHelper;
 use App\Models\Transaction;
 use App\Models\SubscriptionPayment;
 use App\Models\TripPayment;
@@ -22,21 +24,21 @@ class TransactionController extends Controller
     // GET /api/transactions — Returns paginated list of transactions scoped to the user's companies.
     public function index(Request $request): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
+        $company = UserHelper::user_company($request);
 
         return response()->json(
             Transaction::with(['tripPayment.trip', 'subscriptionPayment'])
-                ->whereIn('transaction_id', function ($q) use ($companyIds) {
+                ->whereIn('transaction_id', function ($q) use ($company) {
                     $q->select('transaction_id')
-                      ->from('trip_payments')
-                      ->whereIn('trip_id', function ($q2) use ($companyIds) {
-                          $q2->select('trip_id')->from('trips')->whereIn('company_id', $companyIds);
-                      });
+                        ->from('trip_payments')
+                        ->where('trip_id', function ($q2) use ($company) {
+                            $q2->select('trip_id')->from('trips')->whereIn('company_id', $company->company_id);
+                        });
                 })
-                ->orWhereIn('transaction_id', function ($q) use ($companyIds) {
+                ->orWhereIn('transaction_id', function ($q) use ($company) {
                     $q->select('transaction_id')
-                      ->from('subscription_payments')
-                      ->whereIn('company_id', $companyIds);
+                        ->from('subscription_payments')
+                        ->where('company_id', $company->company_id);
                 })
                 ->orderBy('created_at', 'desc')
                 ->paginate(15)
@@ -46,18 +48,8 @@ class TransactionController extends Controller
     // GET /api/transactions/{transaction} — Returns a single transaction with payment details (company-scoped).
     public function show(Request $request, Transaction $transaction): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
-        $accessible = false;
-
-        if ($transaction->relationLoaded('tripPayment') || $transaction->tripPayment) {
-            $transaction->load('tripPayment.trip');
-            $tripCompanyId = optional($transaction->tripPayment->trip)->company_id;
-            $accessible = $tripCompanyId && in_array($tripCompanyId, $companyIds->toArray());
-        }
-        if (!$accessible && $transaction->subscriptionPayment) {
-            $accessible = in_array($transaction->subscriptionPayment->company_id, $companyIds->toArray());
-        }
-
+        $company = UserHelper::user_company($request);
+        $accessible = TransactionHelper::is_transaction_accessible($company, $transaction);
         if (!$accessible) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
@@ -144,18 +136,8 @@ class TransactionController extends Controller
     // PUT /api/transactions/{transaction}/status — Updates a transaction's status (company-scoped).
     public function updateStatus(Request $request, Transaction $transaction): JsonResponse
     {
-        $companyIds = $request->user()->companies->pluck('company_id');
-        $accessible = false;
-
-        if ($transaction->tripPayment) {
-            $transaction->load('tripPayment.trip');
-            $tripCompanyId = optional($transaction->tripPayment->trip)->company_id;
-            $accessible = $tripCompanyId && in_array($tripCompanyId, $companyIds->toArray());
-        }
-        if (!$accessible && $transaction->subscriptionPayment) {
-            $accessible = in_array($transaction->subscriptionPayment->company_id, $companyIds->toArray());
-        }
-
+        $company = UserHelper::user_company($request);
+        $accessible = TransactionHelper::is_transaction_accessible($company, $transaction);
         if (!$accessible) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
