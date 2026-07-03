@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Helpers\DestinationHelper;
 use App\Models\Destination;
 use App\Services\IdGeneratorService;
 use Illuminate\Http\JsonResponse;
@@ -36,14 +37,22 @@ class DestinationController extends Controller
     }
 
     // GET /api/destinations/{destination} — Returns a single destination.
-    public function show(Destination $destination): JsonResponse
+    public function show(Request $request, Destination $destination): JsonResponse
     {
+        if (!DestinationHelper::user_company_dest($request, $destination)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         return response()->json($destination);
     }
 
     // PUT/PATCH /api/destinations/{destination} — Updates a destination's name, country, or URL.
     public function update(Request $request, Destination $destination): JsonResponse
     {
+        if (!DestinationHelper::user_company_dest($request, $destination)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:100',
             'country' => 'nullable|string|max:100',
@@ -56,8 +65,12 @@ class DestinationController extends Controller
     }
 
     // DELETE /api/destinations/{destination} — Deletes a destination.
-    public function destroy(Destination $destination): JsonResponse
+    public function destroy(Request $request, Destination $destination): JsonResponse
     {
+        if (!DestinationHelper::user_company_dest($request, $destination)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $destination->delete();
         return response()->json(null, 204);
     }

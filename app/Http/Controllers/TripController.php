@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\TripCustomerRole;
 use App\Enums\TripStatus;
+use App\Helpers\ItineraryHelper;
 use App\Helpers\UserHelper;
 use App\Models\Customer;
 use App\Models\Trip;
@@ -72,6 +73,10 @@ class TripController extends Controller
     // PUT/PATCH /api/trips/{trip} — Updates trip details.
     public function update(Request $request, Trip $trip): JsonResponse
     {
+        if ($trip->company_id !== UserHelper::user_company($request)->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $validated = $request->validate([
             'trip_name' => 'sometimes|required|string|max:200',
             'description' => 'nullable|string',
@@ -89,6 +94,10 @@ class TripController extends Controller
     // DELETE /api/trips/{trip} — Deletes a trip.
     public function destroy(Trip $trip): JsonResponse
     {
+        if ($trip->company_id !== UserHelper::user_company(request())->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $trip->delete();
         return response()->json(null, 204);
     }
@@ -96,6 +105,10 @@ class TripController extends Controller
     // PUT /api/trips/{trip}/status — Updates a trip's status and returns the full trip with relations.
     public function updateStatus(Request $request, Trip $trip): JsonResponse
     {
+        if ($trip->company_id !== UserHelper::user_company(request())->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $validated = $request->validate([
             'status' => ['required', new Enum(TripStatus::class)],
         ]);
@@ -103,7 +116,9 @@ class TripController extends Controller
         $trip->update($validated);
 
         return response()->json($trip->load([
-            'company', 'createdBy', 'customers',
+            'company',
+            'createdBy',
+            'customers',
             'itineraries.itineraryDays.destinations',
             'itineraries.itineraryFlights',
             'itineraries.itineraryAccommodation',
@@ -115,6 +130,10 @@ class TripController extends Controller
     // GET /api/trips/{trip}/costs — Calculates and returns itinerary costs, payments, and outstanding balance.
     public function costs(Trip $trip): JsonResponse
     {
+        if ($trip->company_id !== UserHelper::user_company(request())->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $trip->load([
             'itineraries.itineraryDays.destinations',
             'itineraries.itineraryFlights',
@@ -122,20 +141,10 @@ class TripController extends Controller
             'tripPayments.transaction',
         ]);
 
-        $itin = $trip->itineraries->first();
+        // Calculate costs for all itineraries
+        $itineraryCosts = $trip->itineraries->map(fn($itin) => ItineraryHelper::calculateItineraryCost($itin));
 
-        $flightsCost = (float) ($itin?->itineraryFlights->sum('cost') ?? 0);
-        $accommodationCost = (float) ($itin?->itineraryAccommodation->sum('cost') ?? 0);
-        $activitiesCost = (float) ($itin?->itineraryDays->flatMap(fn($d) => $d->destinations)->sum('cost') ?? 0);
-
-        $subtotal = $flightsCost + $accommodationCost + $activitiesCost;
-        $serviceFee = round($subtotal * 0.05, 2);
-        $total = $subtotal + $serviceFee;
-
-        $currency = $itin?->itineraryFlights->first()?->currency
-            ?? $itin?->itineraryAccommodation->first()?->currency
-            ?? 'GHS';
-
+        // Payments
         $payments = $trip->tripPayments->map(fn($tp) => [
             'transaction_id' => $tp->transaction_id,
             'amount' => (float) $tp->transaction->amount,
@@ -149,23 +158,18 @@ class TripController extends Controller
         $totalPaid = (float) $payments->where('status', 'completed')->sum('amount');
         $totalPending = (float) $payments->where('status', 'pending')->sum('amount');
 
+        // Overall trip summary (sum of all itineraries)
+        $totalTripCost = $itineraryCosts->sum('total');
+
         return response()->json([
             'trip_id' => $trip->trip_id,
-            'currency' => $currency,
-            'itinerary_costs' => [
-                'flights' => $flightsCost,
-                'accommodation' => $accommodationCost,
-                'activities' => $activitiesCost,
-                'subtotal' => $subtotal,
-                'service_fee' => $serviceFee,
-                'total' => $total,
-            ],
+            'itineraries' => $itineraryCosts,
             'payments' => $payments,
             'summary' => [
-                'total_cost' => $total,
+                'total_cost' => $totalTripCost,
                 'total_paid' => $totalPaid,
                 'total_pending' => $totalPending,
-                'outstanding' => round($total - $totalPaid, 2),
+                'outstanding' => round($totalTripCost - $totalPaid, 2),
             ],
         ]);
     }
@@ -173,6 +177,9 @@ class TripController extends Controller
     // POST /api/trips/{trip}/customers — Attaches a customer to a trip with an optional role.
     public function addCustomer(Request $request, Trip $trip): JsonResponse
     {
+        if ($trip->company_id !== UserHelper::user_company(request())->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
         $validated = $request->validate([
             'customer_id' => 'required|string|exists:customers,customer_id',
             'role' => ['nullable', new Enum(TripCustomerRole::class)],
@@ -188,6 +195,10 @@ class TripController extends Controller
     // DELETE /api/trips/{trip}/customers/{customer} — Detaches a customer from a trip.
     public function removeCustomer(Trip $trip, Customer $customer): JsonResponse
     {
+        if ($trip->company_id !== UserHelper::user_company(request())->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $trip->customers()->detach($customer->customer_id);
 
         return response()->json(null, 204);

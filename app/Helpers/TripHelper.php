@@ -2,7 +2,7 @@
 
 namespace App\Helpers;
 
-use App\Models\Company;
+use App\Models\Trip;
 use Illuminate\Http\Request;
 
 class TripHelper
@@ -10,10 +10,10 @@ class TripHelper
     /**
      * Get user company
      *
-     * @return Company
+     * @return bool
      */
-    public static function is_user_company_trip(Request $request): Company
+    public static function is_user_company_trip(Request $request, Trip $trip): bool
     {
-        return $request->user()->active_company;
+        return $request->user()->active_company->company_id == $trip->company_id;
     }
 }
