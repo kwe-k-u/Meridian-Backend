@@ -34,6 +34,10 @@ class Destination extends Model
         'created_at' => 'datetime',
     ];
 
+    // Every itinerary day this destination has been attached to, across all itineraries/companies
+    // (destinations are a shared lookup table, not owned by one company). See
+    // DestinationHelper::user_company_dest() for how "does this destination belong to my
+    // company" is inferred from this relation.
     public function itineraryDays(): BelongsToMany
     {
         return $this->belongsToMany(ItineraryDay::class, 'itinerary_day_destinations', 'destination_id', 'itinerary_day_id')

@@ -17,7 +17,8 @@ use Illuminate\Validation\Rules\Enum;
 /**
  * Manages financial transactions, subscription payments, and trip payments.
  *
- * Routes: /api/transactions, /api/transactions/subscription-payment, /api/transactions/trip-payment
+ * Routes: /api/transactions, /api/transactions/{id}, /api/transactions/subscription,
+ * /api/transactions/trip, /api/transactions/{id}/status (see routes/api.php).
  */
 class TransactionController extends Controller
 {
@@ -31,8 +32,8 @@ class TransactionController extends Controller
                 ->whereIn('transaction_id', function ($q) use ($company) {
                     $q->select('transaction_id')
                         ->from('trip_payments')
-                        ->where('trip_id', function ($q2) use ($company) {
-                            $q2->select('trip_id')->from('trips')->whereIn('company_id', $company->company_id);
+                        ->whereIn('trip_id', function ($q2) use ($company) {
+                            $q2->select('trip_id')->from('trips')->where('company_id', $company->company_id);
                         });
                 })
                 ->orWhereIn('transaction_id', function ($q) use ($company) {
@@ -57,7 +58,9 @@ class TransactionController extends Controller
         return response()->json($transaction->load(['subscriptionPayment', 'tripPayment.trip']));
     }
 
-    // POST /api/transactions/subscription-payment — Records a subscription payment transaction in a DB transaction.
+    // POST /api/transactions/subscription — Records a subscription payment. Creates two rows
+    // in one DB transaction: the generic Transaction (amount/currency/status) plus a
+    // SubscriptionPayment row that links it to a specific company + subscription.
     public function recordSubscriptionPayment(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -96,7 +99,8 @@ class TransactionController extends Controller
         });
     }
 
-    // POST /api/transactions/trip-payment — Records a trip payment transaction in a DB transaction.
+    // POST /api/transactions/trip — Records a trip payment. Same two-row pattern as
+    // recordSubscriptionPayment() above, but linking to a TripPayment (trip_id + notes) instead.
     public function recordTripPayment(Request $request): JsonResponse
     {
         $validated = $request->validate([

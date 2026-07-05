@@ -9,7 +9,11 @@ use Illuminate\Http\Request;
 /**
  * Handles CRUD operations for subscription tier plans (pricing, features).
  *
- * Routes: /api/subscription-tiers (resourceful)
+ * Routes: only GET /api/subscription-tiers and GET /api/subscription-tiers/{id} are
+ * registered in routes/api.php — the Pricing page reads the plan catalog through these.
+ * store/update/destroy below are intentionally NOT routed: this app has no platform-admin
+ * role/permission model, so exposing "create/edit/delete a pricing plan" to every
+ * authenticated user would let any company invent or change plans for the whole platform.
  */
 class SubscriptionTierController extends Controller
 {
@@ -19,7 +23,7 @@ class SubscriptionTierController extends Controller
         return response()->json(SubscriptionTier::paginate(15));
     }
 
-    // POST /api/subscription-tiers — Creates a new subscription tier.
+    // Not routed — see class docblock.
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -41,7 +45,7 @@ class SubscriptionTierController extends Controller
         return response()->json($subscriptionTier);
     }
 
-    // PUT/PATCH /api/subscription-tiers/{subscriptionTier} — Updates a subscription tier's name, price, features, or status.
+    // Not routed — see class docblock.
     public function update(Request $request, SubscriptionTier $subscriptionTier): JsonResponse
     {
         $validated = $request->validate([
@@ -56,7 +60,7 @@ class SubscriptionTierController extends Controller
         return response()->json($subscriptionTier);
     }
 
-    // DELETE /api/subscription-tiers/{subscriptionTier} — Deletes a subscription tier.
+    // Not routed — see class docblock.
     public function destroy(SubscriptionTier $subscriptionTier): JsonResponse
     {
         $subscriptionTier->delete();

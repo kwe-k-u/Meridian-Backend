@@ -12,17 +12,21 @@ use App\Enums\InvitationStatus;
 /**
  * Manages company invitations sent to users by email.
  *
- * Routes: /api/invitations (resourceful)
+ * Routes: /api/invitations — only POST (store) is actually registered in routes/api.php.
+ * index/show/update/destroy below exist but aren't reachable over HTTP yet (no way to list,
+ * view, accept/decline, or revoke an invitation from the API — just create one).
  */
 class InvitationController extends Controller
 {
-    // GET /api/invitations — Returns paginated list of invitations with company and inviter.
+    // Not routed — see class docblock.
     public function index(): JsonResponse
     {
         return response()->json(Invitation::with(['company', 'inviter'])->paginate(15));
     }
 
-    // POST /api/invitations — Creates a new invitation.
+    // POST /api/invitations — Creates a new invitation. The frontend (Settings > Team page)
+    // generates `token` and `expires_at` itself and sends them in the request body — see
+    // ApiService.sendInvitation() — rather than this endpoint generating them server-side.
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -40,13 +44,13 @@ class InvitationController extends Controller
         return response()->json($invitation, 201);
     }
 
-    // GET /api/invitations/{invitation} — Returns a single invitation with company and inviter.
+    // Not routed — see class docblock.
     public function show(Invitation $invitation): JsonResponse
     {
         return response()->json($invitation->load(['company', 'inviter']));
     }
 
-    // PUT/PATCH /api/invitations/{invitation} — Updates invitation status or role.
+    // Not routed — see class docblock. Would be how an invite gets marked accepted/cancelled.
     public function update(Request $request, Invitation $invitation): JsonResponse
     {
         $validated = $request->validate([
@@ -59,7 +63,7 @@ class InvitationController extends Controller
         return response()->json($invitation);
     }
 
-    // DELETE /api/invitations/{invitation} — Deletes an invitation.
+    // Not routed — see class docblock.
     public function destroy(Invitation $invitation): JsonResponse
     {
         $invitation->delete();

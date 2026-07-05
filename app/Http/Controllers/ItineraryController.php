@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\FlightStatus;
 use App\Enums\AccommodationStatus;
+use App\Enums\DestinationItemType;
 use App\Enums\ItineraryStatus;
 use App\Helpers\ItineraryHelper;
 use App\Helpers\UserHelper;
@@ -14,6 +15,7 @@ use App\Models\ItineraryAccommodation;
 use App\Models\ItineraryDayDestination;
 use App\Models\Trip;
 use App\Services\IdGeneratorService;
+use App\Services\SerpApiService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\Enum;
@@ -21,43 +23,44 @@ use Illuminate\Validation\Rules\Enum;
 /**
  * Manages trip itineraries including daily schedules, destinations, flights, and accommodation.
  *
- * Routes: /api/itineraries, /api/itineraries/{itinerary}/days, /api/itineraries/{itinerary}/flights, /api/itineraries/{itinerary}/accommodation
+ * Routes: /api/itinerary, /api/itinerary/{itinerary}/days, /api/itinerary/{itinerary}/flights, /api/itinerary/{itinerary}/accommodation
  */
 class ItineraryController extends Controller
 {
-    // GET /api/itineraries — Returns paginated list of itineraries scoped to the user's companies.
+    // GET /api/itinerary — Returns paginated list of itineraries scoped to the user's companies.
     public function index(Request $request): JsonResponse
     {
         $company = UserHelper::user_company($request);
         return response()->json(
             Itinerary::with(['trip', 'createdBy'])
-                ->where('trip_id', function ($q) use ($company) {
-                    $q->select('trip_id')->from('trips')->where('company_id', $company->id);
+                ->whereIn('trip_id', function ($q) use ($company) {
+                    $q->select('trip_id')->from('trips')->where('company_id', $company->company_id);
                 })
                 ->paginate(15)
         );
     }
 
-    // POST /api/itineraries — Creates a new itinerary for a trip (company-scoped).
+    // POST /api/itinerary — Creates a new itinerary for a trip (company-scoped).
     public function store(Request $request): JsonResponse
     {
+        $validated = $request->validate([
+            'trip_id' => 'required|string|exists:trips,trip_id',
+            'created_by' => 'nullable|string|exists:users,user_id',
+            'itinerary_name' => 'required|string|max:200',
+            'start_city' => 'nullable|string|max:100',
+            'description' => 'nullable|string',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date',
+        ]);
+
         $company = UserHelper::user_company($request);
-        $trip = Trip::where('company_id', $company->id)
-            ->where('trip_id', $request->trip_id)
+        $trip = Trip::where('company_id', $company->company_id)
+            ->where('trip_id', $validated['trip_id'])
             ->first();
 
         if (!$trip) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
-
-        $validated = $request->validate([
-            'trip_id' => 'required|string|exists:trips,trip_id',
-            'created_by' => 'nullable|string|exists:users,user_id',
-            'itinerary_name' => 'required|string|max:200',
-            'description' => 'nullable|string',
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date',
-        ]);
 
         $validated['itinerary_id'] = IdGeneratorService::generateId('ITN');
         $itinerary = Itinerary::create($validated);
@@ -65,11 +68,11 @@ class ItineraryController extends Controller
         return response()->json($itinerary, 201);
     }
 
-    // GET /api/itineraries/{itinerary} — Returns a single itinerary with days, destinations, flights, and accommodation (company-scoped).
+    // GET /api/itinerary/{itinerary} — Returns a single itinerary with days, destinations, flights, and accommodation (company-scoped).
     public function show(Request $request, Itinerary $itinerary): JsonResponse
     {
         $company = UserHelper::user_company($request);
-        $trip = Trip::where('company_id', $company->id)
+        $trip = Trip::where('company_id', $company->company_id)
             ->where('trip_id', $itinerary->trip_id)
             ->first();
 
@@ -80,17 +83,17 @@ class ItineraryController extends Controller
         return response()->json($itinerary->load([
             'trip',
             'createdBy',
-            'itineraryDays.destinations',
+            'itineraryDays.destinations.destination',
             'itineraryFlights',
             'itineraryAccommodation',
         ]));
     }
 
-    // PUT/PATCH /api/itineraries/{itinerary} — Updates itinerary details (company-scoped).
+    // PUT/PATCH /api/itinerary/{itinerary} — Updates itinerary details (company-scoped).
     public function update(Request $request, Itinerary $itinerary): JsonResponse
     {
         $company = UserHelper::user_company($request);
-        $trip = Trip::where('company_id', $company->id)
+        $trip = Trip::where('company_id', $company->company_id)
             ->where('trip_id', $itinerary->trip_id)
             ->first();
 
@@ -100,6 +103,7 @@ class ItineraryController extends Controller
 
         $validated = $request->validate([
             'itinerary_name' => 'sometimes|required|string|max:200',
+            'start_city' => 'nullable|string|max:100',
             'description' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date',
@@ -111,7 +115,7 @@ class ItineraryController extends Controller
         return response()->json($itinerary);
     }
 
-    // DELETE /api/itineraries/{itinerary} — Deletes an itinerary (company-scoped).
+    // DELETE /api/itinerary/{itinerary} — Deletes an itinerary (company-scoped).
     public function destroy(Request $request, Itinerary $itinerary): JsonResponse
     {
         $company = UserHelper::user_company($request);
@@ -127,7 +131,9 @@ class ItineraryController extends Controller
         return response()->json(null, 204);
     }
 
-    // POST /api/itineraries/{itinerary}/days — Adds a day to an itinerary.
+    // ── Itinerary Days ──
+
+    // POST /api/itinerary/{itinerary}/days — Adds a day to an itinerary.
     public function addDay(Request $request, Itinerary $itinerary): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary($request, $itinerary)) {
@@ -149,7 +155,7 @@ class ItineraryController extends Controller
         return response()->json($day, 201);
     }
 
-    // PUT/PATCH /api/itineraries/days/{itineraryDay} — Updates an itinerary day.
+    // PUT/PATCH /api/itinerary/days/{itineraryDay} — Updates an itinerary day.
     public function updateDay(Request $request, ItineraryDay $itineraryDay): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary($request, $itineraryDay->itinerary)) {
@@ -169,7 +175,7 @@ class ItineraryController extends Controller
         return response()->json($itineraryDay);
     }
 
-    // DELETE /api/itineraries/days/{itineraryDay} — Removes an itinerary day.
+    // DELETE /api/itinerary/days/{itineraryDay} — Removes an itinerary day.
     public function removeDay(ItineraryDay $itineraryDay): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary(request(), $itineraryDay->itinerary)) {
@@ -180,7 +186,7 @@ class ItineraryController extends Controller
         return response()->json(null, 204);
     }
 
-    // POST /api/itineraries/days/{itineraryDay}/destinations — Attaches a destination to an itinerary day (upserts).
+    // POST /api/itinerary/days/{itineraryDay}/destinations — Attaches a destination to an itinerary day (upserts).
     public function addDestinationToDay(Request $request, ItineraryDay $itineraryDay): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary($request, $itineraryDay->itinerary)) {
@@ -189,12 +195,16 @@ class ItineraryController extends Controller
 
         $validated = $request->validate([
             'destination_id' => 'required|string|exists:destinations,destination_id',
+            'item_type' => ['nullable', new Enum(DestinationItemType::class)],
             'cost' => 'nullable|string|max:50',
             'currency' => 'nullable|string|max:3',
             'activities' => 'nullable|string',
             'booking_url' => 'nullable|string|max:500',
         ]);
 
+        // updateOrCreate: if this destination is already attached to this day, its
+        // cost/currency/activities/booking_url get overwritten rather than creating a
+        // duplicate row — calling this twice with the same destination_id is safe.
         ItineraryDayDestination::updateOrCreate(
             [
                 'itinerary_day_id' => $itineraryDay->itinerary_day_id,
@@ -203,10 +213,10 @@ class ItineraryController extends Controller
             $validated
         );
 
-        return response()->json($itineraryDay->load('destinations'), 200);
+        return response()->json($itineraryDay->load('destinations.destination'), 200);
     }
 
-    // DELETE /api/itineraries/days/{itineraryDay}/destinations/{destinationId} — Removes a destination from an itinerary day.
+    // DELETE /api/itinerary/days/{itineraryDay}/destinations/{destinationId} — Removes a destination from an itinerary day.
     public function removeDestinationFromDay(ItineraryDay $itineraryDay, string $destinationId): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary(request(), $itineraryDay->itinerary)) {
@@ -220,7 +230,7 @@ class ItineraryController extends Controller
         return response()->json(null, 204);
     }
 
-    // POST /api/itineraries/{itinerary}/flights — Adds a flight booking to an itinerary.
+    // POST /api/itinerary/{itinerary}/flights — Adds a flight booking to an itinerary.
     public function addFlight(Request $request, Itinerary $itinerary): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary($request, $itinerary)) {
@@ -248,7 +258,60 @@ class ItineraryController extends Controller
         return response()->json($flight, 201);
     }
 
-    // PUT/PATCH /api/itineraries/flights/{itineraryFlight} — Updates a flight booking.
+    // GET /api/itinerary/{itinerary}/flights/search — Searches real flights via SerpApi's
+    // Google Flights engine (see SerpApiService::searchFlights). Read-only — nothing is
+    // saved until the frontend calls addFlight() (above) once per leg of whichever result
+    // was picked.
+    public function searchFlights(Request $request, Itinerary $itinerary, SerpApiService $serpApi): JsonResponse
+    {
+        if (!ItineraryHelper::is_user_company_itinerary($request, $itinerary)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        $validated = $request->validate([
+            'departure_id' => 'required|string|max:10',
+            'arrival_id' => 'required|string|max:10',
+            'outbound_date' => 'required|date',
+            'return_date' => 'nullable|date|after_or_equal:outbound_date',
+        ]);
+
+        $results = $serpApi->searchFlights(
+            $validated['departure_id'],
+            $validated['arrival_id'],
+            $validated['outbound_date'],
+            $validated['return_date'] ?? null,
+        );
+
+        return response()->json($results);
+    }
+
+    // GET /api/itinerary/{itinerary}/accommodation/search — Searches real hotels/stays via
+    // SerpApi's Google Hotels engine (see SerpApiService::searchHotels). Read-only, same as
+    // searchFlights() above — the frontend calls addAccommodation() once a result is picked.
+    public function searchHotels(Request $request, Itinerary $itinerary, SerpApiService $serpApi): JsonResponse
+    {
+        if (!ItineraryHelper::is_user_company_itinerary($request, $itinerary)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        $validated = $request->validate([
+            'q' => 'required|string|max:200',
+            'check_in_date' => 'required|date',
+            'check_out_date' => 'required|date|after:check_in_date',
+            'adults' => 'nullable|integer|min:1|max:10',
+        ]);
+
+        $results = $serpApi->searchHotels(
+            $validated['q'],
+            $validated['check_in_date'],
+            $validated['check_out_date'],
+            $validated['adults'] ?? 2,
+        );
+
+        return response()->json($results);
+    }
+
+    // PUT/PATCH /api/itinerary/flights/{itineraryFlight} — Updates a flight booking.
     public function updateFlight(Request $request, ItineraryFlight $itineraryFlight): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary($request, $itineraryFlight->itinerary)) {
@@ -274,7 +337,7 @@ class ItineraryController extends Controller
         return response()->json($itineraryFlight);
     }
 
-    // DELETE /api/itineraries/flights/{itineraryFlight} — Removes a flight booking.
+    // DELETE /api/itinerary/flights/{itineraryFlight} — Removes a flight booking.
     public function removeFlight(ItineraryFlight $itineraryFlight): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary(request(), $itineraryFlight->itinerary)) {
@@ -285,7 +348,7 @@ class ItineraryController extends Controller
         return response()->json(null, 204);
     }
 
-    // POST /api/itineraries/{itinerary}/accommodation — Adds accommodation to an itinerary.
+    // POST /api/itinerary/{itinerary}/accommodation — Adds accommodation to an itinerary.
     public function addAccommodation(Request $request, Itinerary $itinerary): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary($request, $itinerary)) {
@@ -312,7 +375,7 @@ class ItineraryController extends Controller
         return response()->json($accommodation, 201);
     }
 
-    // PUT/PATCH /api/itineraries/accommodation/{itineraryAccommodation} — Updates accommodation details.
+    // PUT/PATCH /api/itinerary/accommodation/{itineraryAccommodation} — Updates accommodation details.
     public function updateAccommodation(Request $request, ItineraryAccommodation $itineraryAccommodation): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary($request, $itineraryAccommodation->itinerary)) {
@@ -337,7 +400,7 @@ class ItineraryController extends Controller
         return response()->json($itineraryAccommodation);
     }
 
-    // DELETE /api/itineraries/accommodation/{itineraryAccommodation} — Removes accommodation from an itinerary.
+    // DELETE /api/itinerary/accommodation/{itineraryAccommodation} — Removes accommodation from an itinerary.
     public function removeAccommodation(ItineraryAccommodation $itineraryAccommodation): JsonResponse
     {
         if (!ItineraryHelper::is_user_company_itinerary(request(), $itineraryAccommodation->itinerary)) {

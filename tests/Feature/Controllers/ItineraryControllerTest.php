@@ -19,6 +19,9 @@ test('itinerary store validation fails when required fields missing', function (
 test('can create an itinerary and add a day', function () {
     $user = User::factory()->create();
     $trip = Trip::factory()->create();
+    $trip->company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
 
     $this->actingAs($user, 'sanctum');
 

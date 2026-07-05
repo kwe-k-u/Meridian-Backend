@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasOneThrough;
 use Laravel\Sanctum\HasApiTokens;
 
 
@@ -69,14 +70,28 @@ class User extends Authenticatable
         ];
     }
 
+    // All companies this user belongs to, with their per-company role/default/enabled flags
+    // available via the pivot (e.g. $user->companies->first()->pivot->role).
     public function companies(): BelongsToMany
     {
         return $this->belongsToMany(Company::class, 'user_companies', 'user_id', 'company_id')
             ->withPivot(['role', 'is_default', 'is_enabled', 'joined_at']);
     }
 
-    public function active_company() {
-        $active_user_company = UserCompany::where('user_id', $this->user_id)->where('is_enabled', true)->first();
-        return Company::where('company_id', $active_user_company->company_id)->first();
+    // The single company this user is currently "acting as" — the row in user_companies
+    // with is_enabled = true. This is what UserHelper::user_company() returns, and almost
+    // every controller uses it to scope trips/customers/itineraries/etc. to one company.
+    // If a user belongs to multiple companies but none (or more than one) has is_enabled
+    // set, this relation resolves to null / the first match respectively.
+    public function active_company(): HasOneThrough
+    {
+        return $this->hasOneThrough(
+            Company::class,
+            UserCompany::class,
+            'user_id',
+            'company_id',
+            'user_id',
+            'company_id'
+        )->where('is_enabled', true);
     }
 }

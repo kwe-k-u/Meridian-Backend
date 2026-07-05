@@ -26,7 +26,7 @@ class DestinationController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:100',
-            'country' => 'nullable|string|max:100',
+            'country' => 'required|string|max:100',
             'url' => 'nullable|string|max:500',
         ]);
 

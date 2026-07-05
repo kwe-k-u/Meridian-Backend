@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Model for the `itinerary_days` table.
@@ -45,9 +45,16 @@ class ItineraryDay extends Model
         return $this->belongsTo(Itinerary::class, 'itinerary_id', 'itinerary_id');
     }
 
-    public function destinations(): BelongsToMany
+    // Destinations/activities attached to this specific day. Deliberately a HasMany to the
+    // pivot model (ItineraryDayDestination) rather than a BelongsToMany straight to
+    // Destination — a plain BelongsToMany buries cost/currency/activities/booking_url under
+    // Eloquent's `pivot` key in JSON output and leaves no `cost` attribute on the Destination
+    // model itself, which silently broke both the frontend's block rendering (always fell
+    // back to a literal "Activity" placeholder) and ItineraryHelper::calculateItineraryCost()
+    // (summing a non-existent `cost` column always totalled 0). Eager-load
+    // 'itineraryDays.destinations.destination' to also get each attachment's Destination row.
+    public function destinations(): HasMany
     {
-        return $this->belongsToMany(Destination::class, 'itinerary_day_destinations', 'itinerary_day_id', 'destination_id')
-            ->withPivot(['cost', 'currency', 'activities', 'booking_url']);
+        return $this->hasMany(ItineraryDayDestination::class, 'itinerary_day_id', 'itinerary_day_id');
     }
 }

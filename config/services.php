@@ -35,4 +35,25 @@ return [
         ],
     ],
 
+    // Moolre (https://docs.moolre.com/) — mobile-money hosted-checkout payments.
+    // Sandbox only requires api_user; live also needs api_key (payment init) and
+    // api_pubkey (status checks). See App\Services\MoolreService.
+    'moolre' => [
+        'base_url' => env('MOOLRE_BASE_URL', 'https://sandbox.moolre.com'),
+        'api_user' => env('MOOLRE_API_USER'),
+        'api_key' => env('MOOLRE_PRIVATE_KEY'),
+        'api_pubkey' => env('MOOLRE_PUBLIC_KEY'),
+        'account_number' => env('MOOLRE_ACCOUNT_NUMBER'),
+        'callback_url' => env('MOOLRE_CALLBACK_URL'),
+        'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+    ],
+
+    // SerpApi (https://serpapi.com/) — real flight/hotel search for the itinerary builder.
+    // Called server-side only (see App\Services\SerpApiService) so the key is never bundled
+    // into frontend JS, where anyone could read it out and rack up charges on the account.
+    'serpapi' => [
+        'key' => env('SERPAPI_KEY'),
+        'base_url' => 'https://serpapi.com/search.json',
+    ],
+
 ];

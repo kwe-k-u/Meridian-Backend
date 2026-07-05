@@ -19,6 +19,9 @@ test('customers store validation fails when required fields missing', function (
 test('can create a customer when payload is valid', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
+    $company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
 
     $this->actingAs($user, 'sanctum');
 

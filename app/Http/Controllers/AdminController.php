@@ -11,7 +11,8 @@ use App\Enums\AdminRole;
 /**
  * Handles CRUD operations for admin users with role management.
  *
- * Routes: /api/admins (resourceful)
+ * Routes: /api/admins (resourceful) — NOTE: not currently registered in routes/api.php,
+ * so none of these methods are reachable over HTTP yet. Built out but not wired up.
  */
 class AdminController extends Controller
 {

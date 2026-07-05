@@ -32,6 +32,7 @@ class Itinerary extends Model
         'trip_id',
         'created_by',
         'itinerary_name',
+        'start_city',
         'description',
         'start_date',
         'end_date',
@@ -49,14 +50,22 @@ class Itinerary extends Model
         return $this->belongsTo(Trip::class, 'trip_id', 'trip_id');
     }
 
+    // Same relation-name/attribute-name collision as Trip::createdBy() — when eager-loaded,
+    // this replaces the plain `created_by` user-id string with the loaded User object in JSON.
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by', 'user_id');
     }
 
+    // The day-by-day schedule for this itinerary option, each day optionally carrying
+    // linked destinations (see ItineraryDay::destinations()). Ordered by day_number since the
+    // frontend maps array position directly to "Day N" (TripDetail.tsx's rawDays/handleAddBlock)
+    // — without this, rows without an explicit ORDER BY can come back in an arbitrary order
+    // (e.g. by itinerary_day_id, which is time+random and not chronological within a batch
+    // insert), silently misaligning which day a UI action actually applies to.
     public function itineraryDays(): HasMany
     {
-        return $this->hasMany(ItineraryDay::class, 'itinerary_id', 'itinerary_id');
+        return $this->hasMany(ItineraryDay::class, 'itinerary_id', 'itinerary_id')->orderBy('day_number');
     }
 
     public function itineraryFlights(): HasMany

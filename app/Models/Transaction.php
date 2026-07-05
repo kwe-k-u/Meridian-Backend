@@ -40,8 +40,13 @@ class Transaction extends Model
         'paid_at' => 'datetime',
     ];
 
+    // Always included in JSON output (see TransactionResponse.client_name on the frontend).
     protected $appends = ['client_name'];
 
+    // Derives a display name for the Financials table without a dedicated column: for trip
+    // payments, it's the first customer on that trip. Requires tripPayment.trip.customers to
+    // already be eager-loaded (see TransactionController::index/show) — returns null otherwise,
+    // and always null for subscription payments (there's no "customer" to name in that case).
     public function getClientNameAttribute(): ?string
     {
         if ($this->relationLoaded('tripPayment') && $this->tripPayment) {

@@ -50,12 +50,19 @@ class AuthController extends Controller
         ]);
 
         try {
-            // Mocking decoding logic for simulation:
+            // Mocking decoding logic for simulation: a real integration would verify
+            // `provider_token` with Firebase/Google and extract the UID + profile from the
+            // verified token server-side. Here we just hash the raw token into a fake UID
+            // and trust whatever email/display_name/avatar_url the frontend sent alongside it
+            // (see firebase.ts's signInWithGoogle() on the frontend, which reads these straight
+            // off the Firebase UserCredential after a client-side Google popup sign-in).
             $firebaseUid = 'fb_' . md5($request->provider_token);
             $email = $request->input('email');
             $displayName = $request->input('display_name');
             $avatarUrl = $request->input('avatar_url');
 
+            // Match by firebase_uid first (returning Google user), then by email (a user who
+            // originally signed up with a password and is now trying Google for the first time).
             $user = User::where('firebase_uid', $firebaseUid)
                         ->orWhere('email', $email)
                         ->first();
@@ -71,6 +78,8 @@ class AuthController extends Controller
                     'avatar_url' => $avatarUrl,
                     'status' => UserStatus::ACTIVE,
                     'last_login' => now(),
+                    // Google-only users never set a password, but the column isn't nullable —
+                    // fill it with an unguessable random value they'll never need or use.
                     'password' => Hash::make(Str::random(32)),
                 ]);
             } else {

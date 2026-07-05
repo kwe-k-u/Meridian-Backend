@@ -2,13 +2,21 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\AccommodationStatus;
+use App\Enums\FlightStatus;
+use App\Enums\ItineraryStatus;
 use App\Enums\TripCustomerRole;
 use App\Enums\TripStatus;
 use App\Helpers\ItineraryHelper;
 use App\Helpers\UserHelper;
 use App\Models\Customer;
+use App\Models\Itinerary;
+use App\Models\ItineraryAccommodation;
+use App\Models\ItineraryDay;
+use App\Models\ItineraryFlight;
 use App\Models\Trip;
 use App\Services\IdGeneratorService;
+use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\Enum;
@@ -20,10 +28,13 @@ use Illuminate\Validation\Rules\Enum;
  */
 class TripController extends Controller
 {
-    // GET /api/trips — Returns paginated list of trips with company and creator.
+    // GET /api/trips — Returns paginated list of trips with company, creator, and customers.
+    // 'customers' is required here (not just on show()) — the Trips list page's "Traveler"
+    // column falls back to the creator's name whenever no customer is attached, so omitting
+    // this relation made every trip look like it belonged to whoever created it.
     public function index(): JsonResponse
     {
-        $trips = UserHelper::user_company(request())->trips()->with(['company', 'createdBy'])->paginate(15);
+        $trips = UserHelper::user_company(request())->trips()->with(['company', 'createdBy', 'customers'])->paginate(15);
         return response()->json($trips);
     }
 
@@ -62,7 +73,7 @@ class TripController extends Controller
             'company',
             'createdBy',
             'customers',
-            'itineraries.itineraryDays.destinations',
+            'itineraries.itineraryDays.destinations.destination',
             'itineraries.itineraryFlights',
             'itineraries.itineraryAccommodation',
             'calls.actionItems',
@@ -119,7 +130,7 @@ class TripController extends Controller
             'company',
             'createdBy',
             'customers',
-            'itineraries.itineraryDays.destinations',
+            'itineraries.itineraryDays.destinations.destination',
             'itineraries.itineraryFlights',
             'itineraries.itineraryAccommodation',
             'calls.actionItems',
@@ -135,7 +146,7 @@ class TripController extends Controller
         }
 
         $trip->load([
-            'itineraries.itineraryDays.destinations',
+            'itineraries.itineraryDays.destinations.destination',
             'itineraries.itineraryFlights',
             'itineraries.itineraryAccommodation',
             'tripPayments.transaction',
@@ -158,7 +169,9 @@ class TripController extends Controller
         $totalPaid = (float) $payments->where('status', 'completed')->sum('amount');
         $totalPending = (float) $payments->where('status', 'pending')->sum('amount');
 
-        // Overall trip summary (sum of all itineraries)
+        // Overall trip summary (sum of ALL itineraries' totals, not just the one currently
+        // shown in the UI — the frontend picks a single entry out of `itineraries` by index
+        // to display in the cost sidebar for whichever option is selected).
         $totalTripCost = $itineraryCosts->sum('total');
 
         return response()->json([
@@ -202,5 +215,142 @@ class TripController extends Controller
         $trip->customers()->detach($customer->customer_id);
 
         return response()->json(null, 204);
+    }
+
+    // POST /api/trips/{trip}/generate-itinerary — Simulates AI itinerary drafting: waits briefly, then
+    // creates a templated itinerary (days, flights, accommodation) for the trip.
+    public function generateItinerary(Request $request, Trip $trip): JsonResponse
+    {
+        if ($trip->company_id !== UserHelper::user_company($request)->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        $preferences = $request->validate([
+            'budget' => 'nullable|string|max:50',
+            'style' => 'nullable|string|max:50',
+            'priorities' => 'nullable|array',
+            'priorities.*' => 'string|max:50',
+            'notes' => 'nullable|string',
+            'start_city' => 'nullable|string|max:100',
+        ]);
+
+        // Simulate AI processing time — this is a template generator, not a real AI call,
+        // but the frontend shows a "Meridian is building options…" loading screen while it
+        // waits, so we deliberately take a few seconds instead of responding instantly.
+        sleep(4);
+
+        // Use the trip's own dates if set, otherwise default to a 5-day trip starting next week.
+        // Day count is clamped to [1, 14] so a bad/huge date range can't generate hundreds of rows.
+        $startDate = $trip->start_date ? Carbon::parse($trip->start_date) : Carbon::now()->addWeek();
+        $endDate = $trip->end_date ? Carbon::parse($trip->end_date) : $startDate->copy()->addDays(4);
+        $dayCount = max(1, min(14, $startDate->diffInDays($endDate) + 1));
+
+        // Name this itinerary the next unused letter (Option A, B, C...) based on how many
+        // itineraries already exist for the trip, so re-generating creates a new option
+        // rather than overwriting the previous one.
+        $optionLetter = chr(65 + ($trip->itineraries()->count() % 26));
+
+        // Fold any traveler preferences the frontend collected (GenerateItineraryModal) into
+        // the itinerary description — purely cosmetic, doesn't change what gets generated.
+        $descriptionParts = ['Auto-generated itinerary based on your trip brief.'];
+        if (!empty($preferences['budget'])) {
+            $descriptionParts[] = "Budget: {$preferences['budget']}.";
+        }
+        if (!empty($preferences['style'])) {
+            $descriptionParts[] = "Style: {$preferences['style']}.";
+        }
+        if (!empty($preferences['priorities'])) {
+            $descriptionParts[] = 'Priorities: ' . implode(', ', $preferences['priorities']) . '.';
+        }
+
+        $itinerary = Itinerary::create([
+            'itinerary_id' => IdGeneratorService::generateId('ITN'),
+            'trip_id' => $trip->trip_id,
+            'created_by' => $request->user()->user_id,
+            'itinerary_name' => "Option {$optionLetter}",
+            'start_city' => $preferences['start_city'] ?? null,
+            'description' => implode(' ', $descriptionParts),
+            'start_date' => $startDate->toDateString(),
+            'end_date' => $endDate->toDateString(),
+            'status' => ItineraryStatus::DRAFT->value,
+        ]);
+
+        // A small rotating set of generic day plans. They cycle (via % count()) if the trip
+        // is longer than the template list, and the very last day is always "Departure"
+        // (unless the trip is only 1 day long, in which case there's nothing to cycle).
+        $dayTemplates = [
+            ['title' => 'Arrival & check-in', 'description' => 'Land, transfer to accommodation, and settle in.'],
+            ['title' => 'City highlights & orientation', 'description' => 'Guided tour of the main sights and neighborhoods.'],
+            ['title' => 'Full-day excursion', 'description' => 'A signature day trip or activity for the destination.'],
+            ['title' => 'Leisure & optional activities', 'description' => 'Free time with optional add-ons.'],
+            ['title' => 'Culture & cuisine', 'description' => 'Local food experience and a cultural site visit.'],
+            ['title' => 'Free day', 'description' => 'Unstructured day to rest or explore independently.'],
+        ];
+        $departureTemplate = ['title' => 'Departure', 'description' => 'Check out and transfer to the airport.'];
+
+        for ($i = 0; $i < $dayCount; $i++) {
+            $isLastDay = $i === $dayCount - 1;
+            $template = ($isLastDay && $dayCount > 1) ? $departureTemplate : $dayTemplates[$i % count($dayTemplates)];
+
+            ItineraryDay::create([
+                'itinerary_day_id' => IdGeneratorService::generateId('ITD'),
+                'itinerary_id' => $itinerary->itinerary_id,
+                'day_number' => $i + 1,
+                'date' => $startDate->copy()->addDays($i)->toDateString(),
+                'title' => $template['title'],
+                'description' => $template['description'],
+            ]);
+        }
+
+        // One outbound + one return flight, and a single accommodation booking spanning the
+        // whole stay. Destination airport is always a placeholder ("TBD") since there's no
+        // real flight search behind this template — but the departure/return-arrival side is
+        // the traveler's own start_city when one was given, instead of also being "TBD".
+        $originAirport = $preferences['start_city'] ?? 'TBD';
+        ItineraryFlight::create([
+            'flight_id' => IdGeneratorService::generateId('FLT'),
+            'itinerary_id' => $itinerary->itinerary_id,
+            'airline' => 'Meridian Air',
+            'flight_number' => 'MA ' . random_int(100, 999),
+            'departure_airport' => $originAirport,
+            'arrival_airport' => 'TBD',
+            'departure_datetime' => $startDate->copy()->setTime(8, 0)->toDateTimeString(),
+            'arrival_datetime' => $startDate->copy()->setTime(14, 0)->toDateTimeString(),
+            'cost' => 1200,
+            'currency' => 'GHS',
+            'status' => FlightStatus::PENDING->value,
+        ]);
+
+        ItineraryFlight::create([
+            'flight_id' => IdGeneratorService::generateId('FLT'),
+            'itinerary_id' => $itinerary->itinerary_id,
+            'airline' => 'Meridian Air',
+            'flight_number' => 'MA ' . random_int(100, 999),
+            'departure_airport' => 'TBD',
+            'arrival_airport' => $originAirport,
+            'departure_datetime' => $endDate->copy()->setTime(16, 0)->toDateTimeString(),
+            'arrival_datetime' => $endDate->copy()->setTime(22, 0)->toDateTimeString(),
+            'cost' => 1200,
+            'currency' => 'GHS',
+            'status' => FlightStatus::PENDING->value,
+        ]);
+
+        ItineraryAccommodation::create([
+            'accommodation_id' => IdGeneratorService::generateId('ACC'),
+            'itinerary_id' => $itinerary->itinerary_id,
+            'accommodation_name' => 'Recommended stay',
+            'check_in_date' => $startDate->toDateString(),
+            'check_out_date' => $endDate->toDateString(),
+            'room_type' => 'Standard room',
+            'cost' => 400 * max(1, $dayCount - 1), // ~400 GHS/night, nights = days - 1 (min 1 night).
+            'currency' => 'GHS',
+            'status' => AccommodationStatus::PENDING->value,
+        ]);
+
+        return response()->json($itinerary->load([
+            'itineraryDays.destinations.destination',
+            'itineraryFlights',
+            'itineraryAccommodation',
+        ]), 201);
     }
 }

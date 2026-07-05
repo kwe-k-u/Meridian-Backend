@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Helpers\UserHelper;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -11,17 +12,25 @@ use App\Enums\UserStatus;
 /**
  * Handles CRUD operations for user accounts.
  *
- * Routes: /api/users (resourceful)
+ * Routes: /api/users — only index/show/update are actually registered in routes/api.php
+ * (see ->only(['index', 'show', 'update'])). store/destroy below exist but aren't reachable
+ * over HTTP; users are normally created via AuthController (registerCompany / Google JIT).
  */
 class UserController extends Controller
 {
-    // GET /api/users — Returns paginated list of users with their companies.
-    public function index(): JsonResponse
+    // GET /api/users — Returns paginated list of users who share the caller's active company
+    // (scoped the same way every other company-scoped controller is).
+    public function index(Request $request): JsonResponse
     {
-        return response()->json(User::with('companies')->paginate(15));
+        $company = UserHelper::user_company($request);
+        return response()->json(
+            User::with('companies')
+                ->whereHas('companies', fn($q) => $q->where('companies.company_id', $company->company_id))
+                ->paginate(15)
+        );
     }
 
-    // POST /api/users — Creates a new user.
+    // Not routed — see class docblock. Users are normally created via AuthController.
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -39,15 +48,25 @@ class UserController extends Controller
         return response()->json($user, 201);
     }
 
-    // GET /api/users/{user} — Returns a single user with their companies.
-    public function show(User $user): JsonResponse
+    // GET /api/users/{user} — Returns a single user with their companies (only if they share
+    // the caller's active company).
+    public function show(Request $request, User $user): JsonResponse
     {
+        if (!$this->sharesActiveCompany($request, $user)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         return response()->json($user->load('companies'));
     }
 
-    // PUT/PATCH /api/users/{user} — Updates a user's profile fields.
+    // PUT/PATCH /api/users/{user} — Updates a user's profile fields (only if they share the
+    // caller's active company).
     public function update(Request $request, User $user): JsonResponse
     {
+        if (!$this->sharesActiveCompany($request, $user)) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
         $validated = $request->validate([
             'firebase_uid' => 'sometimes|nullable|string|max:128|unique:users,firebase_uid,' . $user->user_id . ',user_id',
             'email' => 'sometimes|required|email|max:255|unique:users,email,' . $user->user_id . ',user_id',
@@ -62,7 +81,14 @@ class UserController extends Controller
         return response()->json($user);
     }
 
-    // DELETE /api/users/{user} — Deletes a user.
+    // Whether $user belongs to the same active company as the authenticated caller.
+    private function sharesActiveCompany(Request $request, User $user): bool
+    {
+        $company = UserHelper::user_company($request);
+        return $user->companies()->where('companies.company_id', $company->company_id)->exists();
+    }
+
+    // Not routed — see class docblock.
     public function destroy(User $user): JsonResponse
     {
         $user->delete();

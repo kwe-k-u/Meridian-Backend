@@ -18,6 +18,9 @@ test('calls store validation fails when required fields missing', function () {
 test('can create a call and add an action item', function () {
     $user = User::factory()->create();
     $trip = Trip::factory()->create();
+    $trip->company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
 
     $this->actingAs($user, 'sanctum');
 

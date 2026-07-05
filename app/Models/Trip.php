@@ -52,17 +52,25 @@ class Trip extends Model
         return $this->belongsTo(Company::class, 'company_id', 'company_id');
     }
 
+    // Note: eager-loading this relation (as index()/show() do) makes Eloquent overwrite the
+    // plain `created_by` string attribute with the loaded User object in the JSON response,
+    // because Laravel snake_cases the relation name `createdBy` to the same key `created_by`.
+    // That's why TripResponse.created_by is typed as `string | {user_id, display_name} | null`
+    // on the frontend — string when not loaded, object when it is.
     public function createdBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by', 'user_id');
     }
 
+    // Travelers assigned to this trip (e.g. lead traveler + companions), via trip_customers.
     public function customers(): BelongsToMany
     {
         return $this->belongsToMany(Customer::class, 'trip_customers', 'trip_id', 'customer_id')
             ->withPivot(['role', 'added_at']);
     }
 
+    // The itinerary "options" generated for this trip (Option A/B/C...) — see
+    // TripController::generateItinerary() and ItineraryController.
     public function itineraries(): HasMany
     {
         return $this->hasMany(Itinerary::class, 'trip_id', 'trip_id');
@@ -73,6 +81,8 @@ class Trip extends Model
         return $this->hasMany(Call::class, 'trip_id', 'trip_id');
     }
 
+    // Payments recorded against this trip (each wraps one Transaction) — see
+    // TransactionController::recordTripPayment() and TripController::costs().
     public function tripPayments(): HasMany
     {
         return $this->hasMany(TripPayment::class, 'trip_id', 'trip_id');

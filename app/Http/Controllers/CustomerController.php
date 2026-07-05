@@ -32,8 +32,6 @@ class CustomerController extends Controller
     // POST /api/customers — Creates a new customer record within one of the user's companies.
     public function store(Request $request): JsonResponse
     {
-        $company = UserHelper::user_company($request);
-
         $validated = $request->validate([
             'company_id' => 'required|string|exists:companies,company_id',
             'first_name' => 'required|string|max:50',
@@ -47,7 +45,9 @@ class CustomerController extends Controller
             'status' => ['nullable', new Enum(CustomerStatus::class)],
         ]);
 
-        if ($validated['company_id'] == $company->company_id) {
+        $company = UserHelper::user_company($request);
+
+        if ($validated['company_id'] != $company->company_id) {
             return response()->json(['message' => 'Unauthorized company.'], 403);
         }
 
@@ -61,7 +61,7 @@ class CustomerController extends Controller
     public function show(Request $request, Customer $customer): JsonResponse
     {
         $company = UserHelper::user_company($request);
-        if (!$customer->company_id == $company->company_id) {
+        if ($customer->company_id != $company->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
@@ -73,7 +73,7 @@ class CustomerController extends Controller
     {
         $company = UserHelper::user_company($request);
 
-        if (!$customer->company_id == $company->company_id) {
+        if ($customer->company_id != $company->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
@@ -98,7 +98,7 @@ class CustomerController extends Controller
     public function destroy(Request $request, Customer $customer): JsonResponse
     {
         $company = UserHelper::user_company($request);
-        if (!$customer->company_id == $company->company_id) {
+        if ($customer->company_id != $company->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
