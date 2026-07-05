@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AirportController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CallController;
 use App\Http\Controllers\CompanyController;
@@ -47,6 +48,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ── [Destination Routes] ──
     Route::apiResource('destinations', DestinationController::class);
+
+    // ── [Airport Routes] ── Read-only city/country → IATA code lookup for flight search.
+    Route::get('/airports/search', [AirportController::class, 'search']);
 
     // ── [Customer Routes] ──
     Route::apiResource('customers', CustomerController::class);

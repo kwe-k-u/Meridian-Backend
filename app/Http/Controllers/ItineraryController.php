@@ -202,16 +202,22 @@ class ItineraryController extends Controller
             'booking_url' => 'nullable|string|max:500',
         ]);
 
-        // updateOrCreate: if this destination is already attached to this day, its
-        // cost/currency/activities/booking_url get overwritten rather than creating a
-        // duplicate row — calling this twice with the same destination_id is safe.
-        ItineraryDayDestination::updateOrCreate(
-            [
-                'itinerary_day_id' => $itineraryDay->itinerary_day_id,
-                'destination_id' => $validated['destination_id'],
-            ],
-            $validated
-        );
+        // Upsert: if this destination is already attached to this day, its cost/currency/
+        // activities/booking_url get overwritten rather than creating a duplicate row —
+        // calling this twice with the same destination_id is safe. This can't use Eloquent's
+        // updateOrCreate() because itinerary_day_destinations has a composite primary key
+        // (itinerary_day_id, destination_id) with no surrogate `id` column — updateOrCreate's
+        // internal save() always scopes its UPDATE by getKeyName() (defaults to 'id'), which
+        // doesn't exist on this table and throws. A query-builder update scoped by the actual
+        // composite key sidesteps that entirely.
+        $match = [
+            'itinerary_day_id' => $itineraryDay->itinerary_day_id,
+            'destination_id' => $validated['destination_id'],
+        ];
+        $updated = ItineraryDayDestination::where($match)->update($validated);
+        if (!$updated) {
+            ItineraryDayDestination::create(array_merge($match, $validated));
+        }
 
         return response()->json($itineraryDay->load('destinations.destination'), 200);
     }
