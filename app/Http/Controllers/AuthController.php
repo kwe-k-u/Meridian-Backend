@@ -110,7 +110,7 @@ class AuthController extends Controller
         return response()->json([
             'access_token' => $token,
             'token_type' => 'Bearer',
-            'user' => $user->load('companies'),
+            'user' => $user->load('active_company'),
         ], 200);
     }
 

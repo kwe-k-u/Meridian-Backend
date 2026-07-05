@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers;
 
-use App\Helpers\UserHelper;
+use App\Enums\CompanyRole;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\Enum;
 use App\Enums\UserStatus;
+use App\Helpers\UserHelper;
+use App\Models\UserCompany;
 
 /**
  * Handles CRUD operations for user accounts.
@@ -93,5 +95,59 @@ class UserController extends Controller
     {
         $user->delete();
         return response()->json(null, 204);
+    }
+
+    public function updateStatus(Request $request) {
+        $validated = $request->validate([
+            'user_id' => 'string|required|max:20'
+        ]);
+
+        $user = User::find($validated['user_id']);
+        if (!$user) {
+            return response()->json(['message' => 'User not found'], 404);
+        }
+
+        $company = UserHelper::user_company($request);
+        if (!$company->company_id == $user->active_company->company_id) {
+            return response()->json(['message' => 'User not found'], 404);
+        }
+
+        if ($user->status == UserStatus::ACTIVE->value) {
+            $user->status = UserStatus::DISABLED;
+        } else {
+            $user->status = UserStatus::ACTIVE;
+        }
+
+        $user->save();
+        return response()->json($user, 201);
+    }
+
+    public function updateRole(Request $request) {
+        $validated = $request->validate([
+            'user_id' => 'string|required|max:20',
+            'role' => ['required', new Enum(CompanyRole::class)]
+        ]);
+        $user = User::find($validated['user_id']);
+        if (!$user) {
+            return response()->json(['message' => 'User not found'], 404);
+        }
+        $company = UserHelper::user_company($request);
+        if (!$company->company_id == $user->active_company->company_id) {
+            return response()->json(['message' => 'User not found'], 404);
+        }
+
+        $user_company = UserCompany::where('user_id', $user->user_id)
+                                    ->where('is_enabled', true)
+                                    ->where('company_id', $company->company_id)
+                                    ->first();
+        if (!$user_company) {
+            return response()->json(['message' => 'User not found'], 404);
+        }
+        $user_company->role = $validated['role'];
+        $user_company->save();
+        return response()->json([
+            'user' => $user,
+            'role' => $user_company->role
+            ], 201);
     }
 }

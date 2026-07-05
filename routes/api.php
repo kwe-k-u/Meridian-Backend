@@ -112,7 +112,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('companies', CompanyController::class)->only(['index', 'show', 'update']);
 
     // ── [User Routes] ──
-    Route::apiResource('users', UserController::class)->only(['index', 'show', 'update']);
+    Route::apiResource('users', UserController::class);
+    Route::prefix('users')->group(function() {
+        Route::put('/{user}/status', [UserController::class, 'updateStatus']);
+        Route::put('/{user}/role', [UserController::class, 'updateRole']);
+    });
 
     // ── [Invitation Routes] ──
     Route::post('/invitations', [InvitationController::class, 'store']);
