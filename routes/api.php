@@ -14,6 +14,7 @@ use App\Http\Controllers\MoolrePaymentController;
 use App\Http\Controllers\SubscriptionTierController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TripController;
+use App\Http\Controllers\EmailController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 
