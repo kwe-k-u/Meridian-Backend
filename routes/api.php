@@ -127,6 +127,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/invitations', [InvitationController::class, 'store']);
 
     // ── [Profile Routes] ──
+    Route::get('/auth/me', [AuthController::class, 'me']);
     Route::put('/auth/profile', [AuthController::class, 'updateProfile']);
 
     // ── [Transaction Routes] ──

@@ -56,4 +56,13 @@ return [
         'base_url' => 'https://serpapi.com/search.json',
     ],
 
+    // meridian-ai — Python FastAPI microservice for LLM-powered itinerary generation.
+    // Service-to-service auth: both sides share MERIDIAN_AI_SERVICE_TOKEN (Bearer).
+    // See App\Services\AI\MeridianAiService.
+    'meridian_ai' => [
+        'url'     => env('MERIDIAN_AI_URL', 'http://127.0.0.1:9000'),
+        'token'   => env('MERIDIAN_AI_SERVICE_TOKEN'),
+        'timeout' => env('MERIDIAN_AI_TIMEOUT', 90),
+    ],
+
 ];

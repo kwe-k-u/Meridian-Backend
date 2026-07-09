@@ -110,7 +110,7 @@ class AuthController extends Controller
         return response()->json([
             'access_token' => $token,
             'token_type' => 'Bearer',
-            'user' => $user->load('active_company'),
+            'user' => $user->load('companies'),
         ], 200);
     }
 
@@ -171,6 +171,13 @@ class AuthController extends Controller
                 'message' => 'An error occurred while provisioning your corporate workspace accounts. Please try again.',
             ], 500);
         }
+    }
+
+    // GET /api/auth/me — Returns the current user with companies (pivot) eager-loaded.
+    // Used by the frontend on startup to refresh stale cached user data.
+    public function me(Request $request): JsonResponse
+    {
+        return response()->json(['user' => $request->user()->load('companies')]);
     }
 
     // PUT /api/auth/profile — Updates the authenticated user's display name, phone, or avatar.
