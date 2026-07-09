@@ -304,7 +304,7 @@ class MoolrePaymentController extends Controller
             return;
         }
 
-        $result = $moolre->checkPaymentStatus($transaction->transaction_id);
+        $result = $moolre->checkPaymentStatus($transaction->paid_at);
         $txStatus = $result['data']['txstatus'] ?? null;
 
         if ($txStatus == 1) {

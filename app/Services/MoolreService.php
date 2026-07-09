@@ -59,14 +59,43 @@ class MoolreService
      * Server-to-server payment status check by our own external reference (POST
      * /open/transact/status, idtype=1 = "look up by externalref").
      */
-    public function checkPaymentStatus(string $externalRef): array
+    public function fetchTransactions(string $startDate=null, string $endDate=null): array
     {
         $response = Http::withHeaders($this->headers(['X-API-PUBKEY' => $this->apiPubkey]))
             ->post("{$this->baseUrl}/open/transact/status", [
                 'type' => 1,
-                'idtype' => 1,
-                'id' => $externalRef,
+                'startdate' => $startDate,
+                'enddate' => $endDate,
                 'accountnumber' => $this->accountNumber,
+            ]);
+
+        return $response->json() ?? [];
+    }
+
+    /**
+     * Server-to-server payment status check by our own external reference (POST
+     * /open/transact/status, idtype=1 = "look up by externalref").
+     */
+    public function checkPaymentStatus(string $paidDateTime): array
+    {
+        $response = Http::withHeaders($this->headers(['X-API-PUBKEY' => $this->apiPubkey]))
+            ->post("{$this->baseUrl}/open/transact/status", [
+                'type' => 1,
+                'limit' => 1,
+                'startdate' => $paidDateTime,
+                'enddate' => $paidDateTime,
+                'accountnumber' => $this->accountNumber,
+            ]);
+
+        return $response->json() ?? [];
+    }
+
+    public function createCompanyWallet() {
+        $response = Http::withHeaders($this->headers(['X-API-KEY' => $this->apiKey]))
+            ->post("{$this->baseUrl}/open/account/create", [
+                'type' => 1,
+                'currency' => 'GHS',
+                'accountname' => $this->accountNumber,
             ]);
 
         return $response->json() ?? [];
