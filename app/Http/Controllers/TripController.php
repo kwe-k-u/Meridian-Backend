@@ -240,6 +240,9 @@ class TripController extends Controller
             'notes'          => 'nullable|string',
             'start_city'     => 'nullable|string|max:100',
             'provider'       => 'nullable|string|in:gemini,openai,anthropic,ollama',
+            // Specific model variant selected in the UI (e.g. "claude-sonnet-5", "gpt-4o").
+            // Provider is inferred from the model prefix when not explicitly set.
+            'model'          => 'nullable|string|max:100',
             'include_events' => 'nullable|boolean',
         ]);
 
@@ -322,9 +325,10 @@ class TripController extends Controller
                     } catch (\Throwable) {}
                 }
 
-                // Ensure preferences serialises as a JSON object ({}) even when empty.
-                $provider     = $preferences['provider'] ?? null;
-                $prefsPayload = empty($preferences) ? new \stdClass() : $preferences;
+                // Resolve provider: explicit > inferred from model prefix > null (use AI service default).
+                $selectedModel = $preferences['model'] ?? null;
+                $provider      = $preferences['provider'] ?? self::modelToProvider($selectedModel);
+                $prefsPayload  = empty($preferences) ? new \stdClass() : $preferences;
 
                 $aiPayload = [
                     'trip_brief'         => $context['trip_brief'],
@@ -338,6 +342,9 @@ class TripController extends Controller
                 ];
                 if ($provider) {
                     $aiPayload['provider'] = $provider;
+                }
+                if ($selectedModel) {
+                    $aiPayload['model'] = $selectedModel;
                 }
 
                 $aiResult = $aiService->generateItinerary($aiPayload);
@@ -404,6 +411,18 @@ class TripController extends Controller
         if (preg_match('/(?<=\s)([A-Z][a-z]{2,})\b/', $text, $m)) {
             return $m[1];
         }
+        return null;
+    }
+
+    // Maps a specific model ID (e.g. "claude-sonnet-5", "gpt-4o", "gemini-2.0-flash") to its
+    // provider name understood by meridian-ai. Returns null if unrecognised (service uses default).
+    private static function modelToProvider(?string $model): ?string
+    {
+        if (!$model) return null;
+        if (str_starts_with($model, 'claude'))  return 'anthropic';
+        if (str_starts_with($model, 'gpt'))     return 'openai';
+        if (str_starts_with($model, 'gemini'))  return 'gemini';
+        if (str_starts_with($model, 'llama') || str_starts_with($model, 'mistral')) return 'ollama';
         return null;
     }
 
