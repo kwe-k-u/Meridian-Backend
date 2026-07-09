@@ -59,11 +59,12 @@ class MoolreService
      * Server-to-server payment status check by our own external reference (POST
      * /open/transact/status, idtype=1 = "look up by externalref").
      */
-    public function fetchTransactions(string $startDate=null, string $endDate=null): array
+    public function fetchTransactions(string $startDate=null, string $endDate=null, int $limit=10): array
     {
         $response = Http::withHeaders($this->headers(['X-API-PUBKEY' => $this->apiPubkey]))
-            ->post("{$this->baseUrl}/open/transact/status", [
+            ->post("{$this->baseUrl}/open/account/status", [
                 'type' => 1,
+                'limit' => $limit,
                 'startdate' => $startDate,
                 'enddate' => $endDate,
                 'accountnumber' => $this->accountNumber,
@@ -72,18 +73,18 @@ class MoolreService
         return $response->json() ?? [];
     }
 
+
     /**
      * Server-to-server payment status check by our own external reference (POST
      * /open/transact/status, idtype=1 = "look up by externalref").
      */
-    public function checkPaymentStatus(string $paidDateTime): array
+    public function checkPaymentStatus(string $externalRef): array
     {
         $response = Http::withHeaders($this->headers(['X-API-PUBKEY' => $this->apiPubkey]))
             ->post("{$this->baseUrl}/open/transact/status", [
                 'type' => 1,
-                'limit' => 1,
-                'startdate' => $paidDateTime,
-                'enddate' => $paidDateTime,
+                'idtype' => 1,
+                'id' => $externalRef,
                 'accountnumber' => $this->accountNumber,
             ]);
 
