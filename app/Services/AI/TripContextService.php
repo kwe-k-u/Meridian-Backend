@@ -105,6 +105,26 @@ class TripContextService
             }
         }
 
+        $depTime    = $preferences['flight_departure_time'] ?? null;
+        $retTime    = $preferences['return_flight_time'] ?? null;
+        $startCity  = $preferences['start_city'] ?? null;
+
+        if ($depTime || $retTime) {
+            $flightNote = 'Flight schedule:';
+            if ($depTime) {
+                $flightNote .= $startCity
+                    ? " outbound departs {$startCity} at {$depTime}"
+                    : " outbound departs at {$depTime}";
+            }
+            if ($retTime) {
+                $flightNote .= $depTime ? "," : '';
+                $flightNote .= " return departs at {$retTime}";
+            }
+            $flightNote .= '. Plan Day 1 activities to start after the outbound arrival,'
+                . ' and keep the final day free before the return departure.';
+            $parts[] = $flightNote;
+        }
+
         return implode(' ', $parts);
     }
 

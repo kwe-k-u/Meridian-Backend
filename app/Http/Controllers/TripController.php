@@ -242,8 +242,11 @@ class TripController extends Controller
             'provider'       => 'nullable|string|in:gemini,openai,anthropic,ollama',
             // Specific model variant selected in the UI (e.g. "claude-sonnet-5", "gpt-4o").
             // Provider is inferred from the model prefix when not explicitly set.
-            'model'          => 'nullable|string|max:100',
-            'include_events' => 'nullable|boolean',
+            'model'                  => 'nullable|string|max:100',
+            'include_events'         => 'nullable|boolean',
+            // Flight schedule hints — let the AI plan Day 1 and last day around real flight times.
+            'flight_departure_time'  => 'nullable|string|max:10',
+            'return_flight_time'     => 'nullable|string|max:10',
         ]);
 
         $startDate = $trip->start_date ? Carbon::parse($trip->start_date) : Carbon::now()->addWeek();
