@@ -90,12 +90,12 @@ class MoolreService
         return $response->json() ?? [];
     }
 
-    public function createCompanyWallet() {
+    public function createCompanyWallet(string $accountname) {
         $response = Http::withHeaders($this->headers(['X-API-KEY' => $this->apiKey]))
             ->post("{$this->baseUrl}/open/account/create", [
                 'type' => 1,
                 'currency' => 'GHS',
-                'accountname' => $this->accountNumber,
+                'accountname' => $accountname,
             ]);
 
         return $response->json() ?? [];
