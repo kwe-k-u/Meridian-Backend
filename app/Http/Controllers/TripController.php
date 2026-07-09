@@ -243,6 +243,8 @@ class TripController extends Controller
             // Specific model variant selected in the UI (e.g. "claude-sonnet-5", "gpt-4o").
             // Provider is inferred from the model prefix when not explicitly set.
             'model'                  => 'nullable|string|max:100',
+            'include_flights'         => 'nullable|boolean',
+            'include_stays'          => 'nullable|boolean',
             'include_events'         => 'nullable|boolean',
             // Flight schedule hints — let the AI plan Day 1 and last day around real flight times.
             'flight_departure_time'  => 'nullable|string|max:10',
@@ -287,8 +289,12 @@ class TripController extends Controller
                 $destText   = $trip->description ?? $trip->trip_name ?? '';
                 $destCity   = self::extractDestinationCity($destText);
 
+                $includeFlights = (bool) ($preferences['include_flights'] ?? true);
+                $includeStays   = (bool) ($preferences['include_stays']   ?? true);
+                $includeEvents  = (bool) ($preferences['include_events']  ?? true);
+
                 // Booking.com via RapidAPI: richer hotel data (stars, reviews, real pricing)
-                if (config('services.hotels_rapidapi.key') && $destCity) {
+                if ($includeStays && config('services.hotels_rapidapi.key') && $destCity) {
                     try {
                         $bookingResults = (new BookingComService())->searchByCity($destCity, $checkIn, $checkOut, $guestCount, 8);
                         $stayCandidates = $bookingResults['results'] ?? [];
@@ -299,19 +305,21 @@ class TripController extends Controller
                 if (config('services.serpapi.key')) {
                     $serpApi = new SerpApiService();
 
-                    $departureCity = $startCity ?? null;
-                    if ($departureCity && $destCity) {
-                        $depIata = self::cityToIata($departureCity);
-                        $arrIata = self::cityToIata($destCity);
-                        if ($depIata && $arrIata) {
-                            try {
-                                $flightResults    = $serpApi->searchFlights($depIata, $arrIata, $checkIn, $checkOut);
-                                $flightCandidates = array_slice($flightResults['results'] ?? [], 0, 6);
-                            } catch (\Throwable) {}
+                    if ($includeFlights) {
+                        $departureCity = $startCity ?? null;
+                        if ($departureCity && $destCity) {
+                            $depIata = self::cityToIata($departureCity);
+                            $arrIata = self::cityToIata($destCity);
+                            if ($depIata && $arrIata) {
+                                try {
+                                    $flightResults    = $serpApi->searchFlights($depIata, $arrIata, $checkIn, $checkOut);
+                                    $flightCandidates = array_slice($flightResults['results'] ?? [], 0, 6);
+                                } catch (\Throwable) {}
+                            }
                         }
                     }
 
-                    if (empty($stayCandidates) && $destCity) {
+                    if ($includeStays && empty($stayCandidates) && $destCity) {
                         try {
                             $hotelResults   = $serpApi->searchHotels($destCity, $checkIn, $checkOut, $guestCount);
                             $stayCandidates = array_slice($hotelResults['results'] ?? [], 0, 8);
@@ -319,8 +327,7 @@ class TripController extends Controller
                     }
                 }
 
-                // Ticketmaster: real events at the destination (agent can toggle off per generation)
-                $includeEvents = (bool) ($preferences['include_events'] ?? true);
+                // Ticketmaster: real events at the destination
                 if ($includeEvents && config('services.ticketmaster.key') && $destCity) {
                     try {
                         $eventResults    = (new TicketmasterService())->searchEvents($destCity, $checkIn, $checkOut, null, 10);
