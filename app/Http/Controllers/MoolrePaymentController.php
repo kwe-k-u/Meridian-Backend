@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\TransactionStatus;
+use App\Helpers\ItineraryHelper;
 use App\Helpers\UserHelper;
 use App\Models\CompanySubscription;
 use App\Models\SubscriptionPayment;
@@ -26,7 +27,9 @@ use Illuminate\Support\Facades\Log;
  * instead of the caller telling us directly, we ask Moolre (see syncStatusFromMoolre()).
  *
  * Routes: /api/payments/moolre/trip, /subscription, /{transaction}/status (authenticated),
- * and /api/payments/moolre/webhook (public — see routes/api.php).
+ * /api/payments/moolre/webhook (public), and /api/public/payments/moolre/trip,
+ * /{transaction}/status (public — traveler-initiated trip payments, no Meridian account
+ * required; see routes/api.php).
  */
 class MoolrePaymentController extends Controller
 {
@@ -69,7 +72,86 @@ class MoolrePaymentController extends Controller
             return $transaction;
         });
 
-        return $this->requestCheckoutLink($moolre, $transaction, $request);
+        $email = $request->user()->email ?? 'payments@meridian.app';
+        $redirect = rtrim(config('services.moolre.frontend_url'), '/') . '/app/payments/callback?ref=' . $transaction->transaction_id;
+        return $this->requestCheckoutLink($moolre, $transaction, $email, $redirect);
+    }
+
+    // POST /api/public/payments/moolre/trip — Public equivalent of initiateTripPayment(), used
+    // by the traveler-facing TravelerView.tsx "Pay" flow — no Meridian account required, since
+    // trip_id from the shareable link is the only thing identifying the payer. The amount is
+    // re-validated against the trip's own outstanding balance server-side (never trusts
+    // whatever the client computed), so a traveler can never overpay or pay a trip that's
+    // already settled.
+    public function initiatePublicTripPayment(Request $request, MoolreService $moolre): JsonResponse
+    {
+        $validated = $request->validate([
+            'trip_id' => 'required|string|exists:trips,trip_id',
+            'amount' => 'required|numeric|min:50',
+        ]);
+
+        $trip = Trip::with([
+            'customers',
+            'itineraries.itineraryDays.destinations',
+            'itineraries.itineraryFlights',
+            'itineraries.itineraryAccommodation',
+            'tripPayments.transaction',
+        ])->find($validated['trip_id']);
+
+        if (!$trip) {
+            return response()->json(['message' => 'Trip not found.'], 404);
+        }
+
+        $outstanding = $this->calculateOutstanding($trip);
+
+        if ($outstanding <= 0) {
+            return response()->json(['message' => 'This trip has no outstanding balance.'], 422);
+        }
+        // Small epsilon to tolerate float rounding when the traveler chose "pay outstanding
+        // balance in full" and the client-computed total drifted a cent from ours.
+        if ($validated['amount'] > $outstanding + 0.01) {
+            return response()->json(['message' => 'Amount exceeds the outstanding balance.'], 422);
+        }
+
+        $transaction = DB::transaction(function () use ($validated) {
+            $transactionId = IdGeneratorService::generateId('TXN');
+
+            $transaction = Transaction::create([
+                'transaction_id' => $transactionId,
+                'amount' => $validated['amount'],
+                'currency' => 'GHS',
+                'payment_method' => 'moolre',
+                'transaction_reference' => $transactionId,
+                'status' => TransactionStatus::PENDING->value,
+            ]);
+
+            TripPayment::create([
+                'transaction_id' => $transactionId,
+                'trip_id' => $validated['trip_id'],
+                'notes' => 'Traveler payment',
+            ]);
+
+            return $transaction;
+        });
+
+        $email = $trip->customers->first()?->email ?? 'payments@meridian.app';
+        $redirect = rtrim(config('services.moolre.frontend_url'), '/') . '/travel/' . $trip->trip_id . '/payment-callback?ref=' . $transaction->transaction_id;
+        return $this->requestCheckoutLink($moolre, $transaction, $email, $redirect);
+    }
+
+    // Outstanding balance for a trip: sum of every itinerary's total cost, minus whatever's
+    // already been paid (completed transactions only). Mirrors TripController::buildCostsResponse()'s
+    // summary.outstanding — kept separate since that method is private to TripController and
+    // this is the one place a payment amount actually needs to be validated against it.
+    // Assumes itineraries.*/tripPayments.transaction are already eager-loaded on $trip.
+    private function calculateOutstanding(Trip $trip): float
+    {
+        $totalCost = $trip->itineraries->sum(fn($itin) => ItineraryHelper::calculateItineraryCost($itin)['total']);
+        $totalPaid = (float) $trip->tripPayments
+            ->filter(fn($tp) => $tp->transaction->status === TransactionStatus::COMPLETED)
+            ->sum(fn($tp) => (float) $tp->transaction->amount);
+
+        return round($totalCost - $totalPaid, 2);
     }
 
     // POST /api/payments/moolre/subscription — Same idea as initiateTripPayment(), but for a
@@ -112,18 +194,17 @@ class MoolrePaymentController extends Controller
             return $transaction;
         });
 
-        return $this->requestCheckoutLink($moolre, $transaction, $request);
+        $email = $request->user()->email ?? 'payments@meridian.app';
+        $redirect = rtrim(config('services.moolre.frontend_url'), '/') . '/app/payments/callback?ref=' . $transaction->transaction_id;
+        return $this->requestCheckoutLink($moolre, $transaction, $email, $redirect);
     }
 
-    // Shared by both initiate* methods above: asks Moolre for a checkout link for a
+    // Shared by every initiate* method above: asks Moolre for a checkout link for a
     // just-created pending Transaction. If Moolre rejects the request, the transaction (and
     // its trip/subscription payment row) is deleted rather than left stuck `pending` forever
     // with nothing pointing back at it.
-    private function requestCheckoutLink(MoolreService $moolre, Transaction $transaction, Request $request): JsonResponse
+    private function requestCheckoutLink(MoolreService $moolre, Transaction $transaction, string $email, string $redirect): JsonResponse
     {
-        $email = $request->user()->email ?? 'payments@meridian.app';
-        $redirect = rtrim(config('services.moolre.frontend_url'), '/') . '/app/payments/callback?ref=' . $transaction->transaction_id;
-
         $result = $moolre->generatePaymentLink(
             $transaction->transaction_id,
             (float) $transaction->amount,
@@ -194,6 +275,24 @@ class MoolrePaymentController extends Controller
         }
 
         return response()->json($transaction->fresh()->load(['tripPayment.trip', 'subscriptionPayment']));
+    }
+
+    // GET /api/public/payments/moolre/{transaction}/status — Public equivalent of status(),
+    // polled by the traveler-facing payment callback page after a Moolre checkout. Scoped to
+    // trip payments only (never subscription payments) — a transaction_id is only ever handed
+    // to the traveler who just initiated that specific payment, the same trust model as the
+    // public trip endpoints above.
+    public function publicStatus(Transaction $transaction, MoolreService $moolre): JsonResponse
+    {
+        if (!$transaction->tripPayment) {
+            return response()->json(['message' => 'Not found.'], 404);
+        }
+
+        if ($transaction->status === TransactionStatus::PENDING) {
+            $this->syncStatusFromMoolre($transaction, $moolre);
+        }
+
+        return response()->json($transaction->fresh()->load('tripPayment.trip'));
     }
 
     // Looks up the real status from Moolre and updates our Transaction to match. A no-op once

@@ -145,6 +145,39 @@ class TripController extends Controller
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
+        return response()->json($this->buildCostsResponse($trip));
+    }
+
+    // GET /api/public/trips/{trip} — Public, read-only trip view for the shareable traveler
+    // link (see TravelerView.tsx's /travel/:tripId route, deliberately outside the
+    // authenticated /app/* section since travelers viewing their trip pack don't have
+    // Meridian accounts). No company-ownership check — trip_id itself (an unguessable
+    // generated ID) is the shared secret, same trust model the frontend route already uses.
+    // Deliberately narrower than show(): no createdBy, calls, or tripPayments — nothing a
+    // traveler doesn't need and nothing agency-internal.
+    public function publicShow(Trip $trip): JsonResponse
+    {
+        return response()->json($trip->load([
+            'company',
+            'customers',
+            'itineraries.itineraryDays.destinations.destination',
+            'itineraries.itineraryFlights',
+            'itineraries.itineraryAccommodation',
+        ]));
+    }
+
+    // GET /api/public/trips/{trip}/costs — Public equivalent of costs(); same response shape
+    // (including payment history), used by the traveler view to show what's been paid and
+    // what's still outstanding, and to validate a custom payment amount before initiating one.
+    public function publicCosts(Trip $trip): JsonResponse
+    {
+        return response()->json($this->buildCostsResponse($trip));
+    }
+
+    // Shared by costs()/publicCosts() — computes the itinerary cost breakdown, payment
+    // history, and outstanding balance for a trip. Assumes no relations are pre-loaded.
+    private function buildCostsResponse(Trip $trip): array
+    {
         $trip->load([
             'itineraries.itineraryDays.destinations.destination',
             'itineraries.itineraryFlights',
@@ -174,7 +207,7 @@ class TripController extends Controller
         // to display in the cost sidebar for whichever option is selected).
         $totalTripCost = $itineraryCosts->sum('total');
 
-        return response()->json([
+        return [
             'trip_id' => $trip->trip_id,
             'itineraries' => $itineraryCosts,
             'payments' => $payments,
@@ -184,7 +217,7 @@ class TripController extends Controller
                 'total_pending' => $totalPending,
                 'outstanding' => round($totalTripCost - $totalPaid, 2),
             ],
-        ]);
+        ];
     }
 
     // POST /api/trips/{trip}/customers — Attaches a customer to a trip with an optional role.

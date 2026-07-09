@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CallController;
 use App\Http\Controllers\CompanyController;
 use App\Http\Controllers\CompanySubscriptionController;
+use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DestinationController;
@@ -41,6 +42,22 @@ Route::prefix('auth')->group(function() {
 // ── [Moolre Webhook] ── Public — Moolre has no way to send our bearer token. Not trusted
 // blindly: MoolrePaymentController::webhook() re-verifies status with Moolre itself.
 Route::post('/payments/moolre/webhook', [MoolrePaymentController::class, 'webhook']);
+
+// ── [Currency Rates] ── Public — static, non-sensitive conversion table (see
+// App\Services\CurrencyService). No auth needed, and the public traveler view needs it too.
+Route::get('/currency-rates', [CurrencyController::class, 'index']);
+
+// ── [Public Traveler Routes] ── Reachable via the shareable /travel/{tripId} link — no
+// Meridian account required. trip_id itself (an unguessable generated ID, never sequential)
+// is the "credential" here, the same trust model the frontend's /travel/:tripId route already
+// uses. Scoped narrowly: read-only trip + cost view, and Moolre trip-payment initiation/status
+// — nothing here can mutate a trip/itinerary or reach another company's data.
+Route::prefix('public')->group(function () {
+    Route::get('/trips/{trip}', [TripController::class, 'publicShow']);
+    Route::get('/trips/{trip}/costs', [TripController::class, 'publicCosts']);
+    Route::post('/payments/moolre/trip', [MoolrePaymentController::class, 'initiatePublicTripPayment']);
+    Route::get('/payments/moolre/{transaction}/status', [MoolrePaymentController::class, 'publicStatus']);
+});
 
 // ── [Authenticated Routes] ──
 Route::middleware('auth:sanctum')->group(function () {

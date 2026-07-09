@@ -4,8 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Helpers\UserHelper;
 use App\Models\Company;
+use App\Services\CurrencyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Enum;
 
 /**
@@ -63,6 +65,7 @@ class CompanyController extends Controller
             'company_name' => 'sometimes|required|string|max:100',
             'city_of_operation' => 'nullable|string|max:50',
             'status' => 'sometimes|boolean',
+            'preferred_currency' => ['sometimes', 'string', Rule::in(CurrencyService::supported())],
         ]);
 
         $company->update($validated);

@@ -110,7 +110,7 @@ class AuthController extends Controller
         return response()->json([
             'access_token' => $token,
             'token_type' => 'Bearer',
-            'user' => $user->load('active_company'),
+            'user' => $user->load('companies'),
         ], 200);
     }
 
@@ -161,7 +161,7 @@ class AuthController extends Controller
                 'message' => 'Company and owner registration completed successfully.',
                 'access_token' => $token,
                 'token_type' => 'Bearer',
-                'user' => $user,
+                'user' => $user->load('companies'),
                 'company' => $company
             ], 201);
         } catch (Exception $e) {

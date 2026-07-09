@@ -29,6 +29,7 @@ class Company extends Model
         'country',
         'city_of_operation',
         'status',
+        'preferred_currency',
     ];
 
     // The team members (users) that belong to this company, e.g. for the Settings > Team page.
