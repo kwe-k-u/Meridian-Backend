@@ -355,8 +355,10 @@ class TripController extends Controller
 
             $primary = $itineraries->first();
             return response()->json([
-                'itinerary'   => $primary,
-                'all_options' => $itineraries->values(),
+                'itinerary'         => $primary,
+                'all_options'       => $itineraries->values(),
+                'provider_used'     => $aiResult['provider_used'] ?? null,
+                'skipped_providers' => $aiResult['skipped_providers'] ?? [],
             ], 201);
         }
 
