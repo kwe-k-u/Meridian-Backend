@@ -65,4 +65,20 @@ return [
         'timeout' => env('MERIDIAN_AI_TIMEOUT', 90),
     ],
 
+    // Ticketmaster Discovery API v2 — real event search passed to the AI as
+    // event_candidates so generated itineraries reference bookable events.
+    // See App\Services\TicketmasterService.
+    'ticketmaster' => [
+        'key'      => env('TICKETMASTER_API_KEY'),
+        'base_url' => env('TICKETMASTER_BASE_URL', 'https://app.ticketmaster.com/discovery/v2'),
+    ],
+
+    // Booking.com via RapidAPI — richer hotel data (real pricing, stars, reviews)
+    // used alongside SerpApi stays as stay_candidates for AI generation.
+    // See App\Services\BookingComService.
+    'hotels_rapidapi' => [
+        'key'  => env('HOTELS_RAPIDAPI_KEY'),
+        'host' => env('HOTELS_RAPIDAPI_HOST', 'booking-com15.p.rapidapi.com'),
+    ],
+
 ];

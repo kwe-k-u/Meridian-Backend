@@ -20,8 +20,10 @@ use App\Services\AI\ItineraryBuilderService;
 use App\Services\AI\MeridianAiService;
 use App\Services\AI\TripContextService;
 use App\Models\Airport;
+use App\Services\BookingComService;
 use App\Services\IdGeneratorService;
 use App\Services\SerpApiService;
+use App\Services\TicketmasterService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -231,13 +233,14 @@ class TripController extends Controller
         }
 
         $preferences = $request->validate([
-            'budget'       => 'nullable|string|max:50',
-            'style'        => 'nullable|string|max:50',
-            'priorities'   => 'nullable|array',
-            'priorities.*' => 'string|max:50',
-            'notes'        => 'nullable|string',
-            'start_city'   => 'nullable|string|max:100',
-            'provider'     => 'nullable|string|in:gemini,openai,anthropic,ollama',
+            'budget'         => 'nullable|string|max:50',
+            'style'          => 'nullable|string|max:50',
+            'priorities'     => 'nullable|array',
+            'priorities.*'   => 'string|max:50',
+            'notes'          => 'nullable|string',
+            'start_city'     => 'nullable|string|max:100',
+            'provider'       => 'nullable|string|in:gemini,openai,anthropic,ollama',
+            'include_events' => 'nullable|boolean',
         ]);
 
         $startDate = $trip->start_date ? Carbon::parse($trip->start_date) : Carbon::now()->addWeek();
@@ -267,31 +270,33 @@ class TripController extends Controller
             $aiResult = $cache->get($cacheKey);
 
             if (!$aiResult) {
-                // --- SerpApi: fetch real flights & hotels to ground the AI's options ---
+                // --- External APIs: enrich AI payload with real flights, hotels & events ---
                 $flightCandidates = [];
                 $stayCandidates   = [];
+                $eventCandidates  = [];
 
+                $checkIn    = $startDate->toDateString();
+                $checkOut   = $endDate->toDateString();
+                $guestCount = max(1, $trip->customers()->count());
+                $destText   = $trip->description ?? $trip->trip_name ?? '';
+                $destCity   = self::extractDestinationCity($destText);
+
+                // Booking.com via RapidAPI: richer hotel data (stars, reviews, real pricing)
+                if (config('services.hotels_rapidapi.key') && $destCity) {
+                    try {
+                        $bookingResults = (new BookingComService())->searchByCity($destCity, $checkIn, $checkOut, $guestCount, 8);
+                        $stayCandidates = $bookingResults['results'] ?? [];
+                    } catch (\Throwable) {}
+                }
+
+                // SerpApi: flights + fallback hotel search if Booking.com returned nothing
                 if (config('services.serpapi.key')) {
                     $serpApi = new SerpApiService();
-                    $checkIn  = $startDate->toDateString();
-                    $checkOut = $endDate->toDateString();
-                    $guestCount = max(1, $trip->customers()->count());
 
-                    // Hotel search — trip description often names the destination city directly
-                    $hotelQuery = $trip->description ?? $trip->trip_name;
-                    try {
-                        $hotelResults   = $serpApi->searchHotels($hotelQuery, $checkIn, $checkOut, $guestCount);
-                        $stayCandidates = array_slice($hotelResults['results'] ?? [], 0, 8);
-                    } catch (\Throwable) {}
-
-                    // Flight search — only run when we can resolve both departure and destination
-                    // to IATA codes; SerpApi Google Flights requires 3-letter airport codes.
                     $departureCity = $startCity ?? null;
-                    $destText      = $trip->description ?? $trip->trip_name ?? '';
-                    $destCity      = self::extractDestinationCity($destText);
                     if ($departureCity && $destCity) {
-                        $depIata  = self::cityToIata($departureCity);
-                        $arrIata  = self::cityToIata($destCity);
+                        $depIata = self::cityToIata($departureCity);
+                        $arrIata = self::cityToIata($destCity);
                         if ($depIata && $arrIata) {
                             try {
                                 $flightResults    = $serpApi->searchFlights($depIata, $arrIata, $checkIn, $checkOut);
@@ -299,6 +304,22 @@ class TripController extends Controller
                             } catch (\Throwable) {}
                         }
                     }
+
+                    if (empty($stayCandidates) && $destCity) {
+                        try {
+                            $hotelResults   = $serpApi->searchHotels($destCity, $checkIn, $checkOut, $guestCount);
+                            $stayCandidates = array_slice($hotelResults['results'] ?? [], 0, 8);
+                        } catch (\Throwable) {}
+                    }
+                }
+
+                // Ticketmaster: real events at the destination (agent can toggle off per generation)
+                $includeEvents = (bool) ($preferences['include_events'] ?? true);
+                if ($includeEvents && config('services.ticketmaster.key') && $destCity) {
+                    try {
+                        $eventResults    = (new TicketmasterService())->searchEvents($destCity, $checkIn, $checkOut, null, 10);
+                        $eventCandidates = $eventResults['results'] ?? [];
+                    } catch (\Throwable) {}
                 }
 
                 // Ensure preferences serialises as a JSON object ({}) even when empty.
@@ -312,6 +333,7 @@ class TripController extends Controller
                     'answered_questions' => [],
                     'flight_candidates'  => $flightCandidates,
                     'stay_candidates'    => $stayCandidates,
+                    'event_candidates'   => $eventCandidates,
                     'num_options'        => 3,
                 ];
                 if ($provider) {
