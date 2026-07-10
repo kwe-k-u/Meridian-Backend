@@ -49,7 +49,7 @@ class BookingComService
 
     private function resolveDestId(string $city): ?string
     {
-        $response = Http::withHeaders([
+        $response = Http::timeout(12)->withHeaders([
             'X-RapidAPI-Key'  => $this->apiKey,
             'X-RapidAPI-Host' => $this->host,
         ])->get("https://{$this->host}/api/v1/hotels/searchDestination", ['query' => $city]);
@@ -72,7 +72,7 @@ class BookingComService
         int $adults,
         int $limit,
     ): array {
-        $response = Http::withHeaders([
+        $response = Http::timeout(12)->withHeaders([
             'X-RapidAPI-Key'  => $this->apiKey,
             'X-RapidAPI-Host' => $this->host,
         ])->get("https://{$this->host}/api/v1/hotels/searchHotels", [
@@ -97,17 +97,20 @@ class BookingComService
             $prop  = $hotel['property'] ?? [];
             $price = $prop['priceBreakdown']['grossPrice'] ?? [];
 
+            $hotelName = $prop['name'] ?? 'Unknown hotel';
             return [
-                'name'         => $prop['name'] ?? 'Unknown hotel',
+                'name'         => $hotelName,
                 'stars'        => $prop['propertyClass'] ?? null,
                 'review_score' => $prop['reviewScore'] ?? null,
                 'review_count' => $prop['reviewCount'] ?? null,
                 'price_total'  => isset($price['value']) ? round((float) $price['value'], 2) : null,
+                'price_per_night' => isset($price['value']) ? round((float) $price['value'] / max(1, (int) ($prop['checkinDate'] && $prop['checkoutDate'] ? (new \DateTime($prop['checkoutDate']))->diff(new \DateTime($prop['checkinDate']))->days : 1)), 2) : null,
                 'currency'     => $price['currency'] ?? 'USD',
                 'check_in'     => $prop['checkinDate'] ?? null,
                 'check_out'    => $prop['checkoutDate'] ?? null,
                 'photo_url'    => $prop['photoUrls'][0] ?? null,
                 'source'       => 'booking.com',
+                'link'         => 'https://www.booking.com/searchresults.html?' . http_build_query(['ss' => $hotelName]),
             ];
         }, $hotels), 0, $limit);
 

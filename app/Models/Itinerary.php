@@ -37,12 +37,14 @@ class Itinerary extends Model
         'start_date',
         'end_date',
         'status',
+        'source_links',
     ];
 
     protected $casts = [
-        'status' => ItineraryStatus::class,
-        'start_date' => 'date',
-        'end_date' => 'date',
+        'status'       => ItineraryStatus::class,
+        'start_date'   => 'date',
+        'end_date'     => 'date',
+        'source_links' => 'array',
     ];
 
     public function trip(): BelongsTo

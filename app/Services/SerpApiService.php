@@ -36,7 +36,7 @@ class SerpApiService
      */
     public function searchFlights(string $departureId, string $arrivalId, string $outboundDate, ?string $returnDate = null): array
     {
-        $response = Http::get($this->baseUrl, [
+        $response = Http::timeout(15)->get($this->baseUrl, [
             'engine' => 'google_flights',
             'api_key' => $this->apiKey,
             'departure_id' => strtoupper($departureId),
@@ -95,7 +95,7 @@ class SerpApiService
      */
     public function searchHotels(string $query, string $checkInDate, string $checkOutDate, int $adults = 2): array
     {
-        $response = Http::get($this->baseUrl, [
+        $response = Http::timeout(15)->get($this->baseUrl, [
             'engine' => 'google_hotels',
             'api_key' => $this->apiKey,
             'q' => $query,

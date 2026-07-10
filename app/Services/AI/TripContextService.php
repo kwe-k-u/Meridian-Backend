@@ -105,11 +105,29 @@ class TripContextService
             }
         }
 
+        $startCity  = $preferences['start_city'] ?? null;
+        $legs       = $preferences['flight_legs'] ?? null;
         $depTime    = $preferences['flight_departure_time'] ?? null;
         $retTime    = $preferences['return_flight_time'] ?? null;
-        $startCity  = $preferences['start_city'] ?? null;
 
-        if ($depTime || $retTime) {
+        if (!empty($legs) && is_array($legs)) {
+            // Multi-city or multi-leg schedule provided by the agent.
+            $activelegs = array_filter($legs, fn($l) => !empty($l['date']) || !empty($l['time']));
+            if (!empty($activelegs)) {
+                $flightNote = 'Flight schedule:';
+                foreach (array_values($activelegs) as $i => $leg) {
+                    $label = $leg['label'] ?? ($i === 0 ? 'Outbound' : (count($activelegs) === $i + 1 ? 'Return' : 'Leg ' . ($i + 1)));
+                    $dt    = trim(($leg['date'] ?? '') . ' ' . ($leg['time'] ?? ''));
+                    if ($dt) {
+                        $flightNote .= " {$label} at {$dt};";
+                    }
+                }
+                $flightNote .= ' Plan each day\'s activities around these flight constraints,'
+                    . ' ensuring check-in times and transit are accounted for.';
+                $parts[] = $flightNote;
+            }
+        } elseif ($depTime || $retTime) {
+            // Legacy single-leg schedule.
             $flightNote = 'Flight schedule:';
             if ($depTime) {
                 $flightNote .= $startCity

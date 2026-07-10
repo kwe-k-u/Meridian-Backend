@@ -228,6 +228,9 @@ class TripController extends Controller
     // POST /api/trips/{trip}/generate-itinerary
     public function generateItinerary(Request $request, Trip $trip): JsonResponse
     {
+        // External API calls (flights, hotels, events) + AI generation can easily exceed 30 s.
+        set_time_limit(300);
+
         if ($trip->company_id !== UserHelper::user_company($request)->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
@@ -246,9 +249,14 @@ class TripController extends Controller
             'include_flights'         => 'nullable|boolean',
             'include_stays'          => 'nullable|boolean',
             'include_events'         => 'nullable|boolean',
-            // Flight schedule hints — let the AI plan Day 1 and last day around real flight times.
-            'flight_departure_time'  => 'nullable|string|max:10',
-            'return_flight_time'     => 'nullable|string|max:10',
+            // Legacy single-leg flight schedule hints (kept for backward compat).
+            'flight_departure_time'  => 'nullable|string|max:20',
+            'return_flight_time'     => 'nullable|string|max:20',
+            // Multi-city / multi-leg flight schedule (supersedes the single-leg fields above).
+            'flight_legs'            => 'nullable|array',
+            'flight_legs.*.label'    => 'nullable|string|max:100',
+            'flight_legs.*.date'     => 'nullable|string|max:20',
+            'flight_legs.*.time'     => 'nullable|string|max:10',
         ]);
 
         $startDate = $trip->start_date ? Carbon::parse($trip->start_date) : Carbon::now()->addWeek();
@@ -277,6 +285,9 @@ class TripController extends Controller
             $cacheKey = $cache->makeKey($trip->trip_id, $context['trip_spec'], $preferences);
             $aiResult = $cache->get($cacheKey);
 
+            // Collect source URLs as the searches run so we can store them on each itinerary.
+            $sourceLinks = [];
+
             if (!$aiResult) {
                 // --- External APIs: enrich AI payload with real flights, hotels & events ---
                 $flightCandidates = [];
@@ -298,6 +309,11 @@ class TripController extends Controller
                     try {
                         $bookingResults = (new BookingComService())->searchByCity($destCity, $checkIn, $checkOut, $guestCount, 8);
                         $stayCandidates = $bookingResults['results'] ?? [];
+                        if (!empty($stayCandidates)) {
+                            // Construct a Booking.com search URL for the agent to verify options.
+                            $sourceLinks['hotels_url'] = 'https://www.booking.com/searchresults.html?'
+                                . http_build_query(['ss' => $destCity, 'checkin' => $checkIn, 'checkout' => $checkOut, 'group_adults' => $guestCount]);
+                        }
                     } catch (\Throwable) {}
                 }
 
@@ -314,6 +330,9 @@ class TripController extends Controller
                                 try {
                                     $flightResults    = $serpApi->searchFlights($depIata, $arrIata, $checkIn, $checkOut);
                                     $flightCandidates = array_slice($flightResults['results'] ?? [], 0, 6);
+                                    if ($flightResults['google_flights_url'] ?? null) {
+                                        $sourceLinks['flights_url'] = $flightResults['google_flights_url'];
+                                    }
                                 } catch (\Throwable) {}
                             }
                         }
@@ -323,6 +342,11 @@ class TripController extends Controller
                         try {
                             $hotelResults   = $serpApi->searchHotels($destCity, $checkIn, $checkOut, $guestCount);
                             $stayCandidates = array_slice($hotelResults['results'] ?? [], 0, 8);
+                            // Use first property link as the representative hotels source URL.
+                            $firstLink = $stayCandidates[0]['link'] ?? null;
+                            if ($firstLink) {
+                                $sourceLinks['hotels_url'] = 'https://www.google.com/travel/hotels?q=' . urlencode($destCity);
+                            }
                         } catch (\Throwable) {}
                     }
                 }
@@ -332,6 +356,9 @@ class TripController extends Controller
                     try {
                         $eventResults    = (new TicketmasterService())->searchEvents($destCity, $checkIn, $checkOut, null, 10);
                         $eventCandidates = $eventResults['results'] ?? [];
+                        if (!empty($eventCandidates)) {
+                            $sourceLinks['events_url'] = 'https://www.ticketmaster.com/search?q=' . urlencode($destCity);
+                        }
                     } catch (\Throwable) {}
                 }
 
@@ -367,7 +394,8 @@ class TripController extends Controller
                 $userId,
                 $startCity,
                 $startDate,
-                $endDate
+                $endDate,
+                $sourceLinks ?: null
             );
 
             $primary = $itineraries->first();

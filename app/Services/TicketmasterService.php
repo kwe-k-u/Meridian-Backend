@@ -52,7 +52,7 @@ class TicketmasterService
             $params['classificationName'] = $classification;
         }
 
-        $response = Http::get("{$this->baseUrl}/events.json", $params);
+        $response = Http::timeout(12)->get("{$this->baseUrl}/events.json", $params);
 
         if ($response->failed()) {
             return ['error' => $response->json('fault.faultstring') ?? 'Ticketmaster request failed.', 'results' => []];
