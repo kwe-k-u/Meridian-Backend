@@ -15,7 +15,15 @@ use App\Models\ItineraryAccommodation;
 use App\Models\ItineraryDay;
 use App\Models\ItineraryFlight;
 use App\Models\Trip;
+use App\Services\AI\AiResponseCache;
+use App\Services\AI\ItineraryBuilderService;
+use App\Services\AI\MeridianAiService;
+use App\Services\AI\TripContextService;
+use App\Models\Airport;
+use App\Services\BookingComService;
 use App\Services\IdGeneratorService;
+use App\Services\SerpApiService;
+use App\Services\TicketmasterService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -48,7 +56,7 @@ class TripController extends Controller
             'description' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
-            'budget' => 'nullable|numeric|decimal:2|max:50',
+            'budget' => 'nullable|numeric|min:0',
             'status' => ['nullable', new Enum(TripStatus::class)],
         ]);
 
@@ -93,7 +101,7 @@ class TripController extends Controller
             'description' => 'nullable|string',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
-            'budget' => 'nullable|numeric|decimal:2|max:50',
+            'budget' => 'nullable|numeric|min:0',
             'status' => ['nullable', new Enum(TripStatus::class)],
         ]);
 
@@ -250,140 +258,255 @@ class TripController extends Controller
         return response()->json(null, 204);
     }
 
-    // POST /api/trips/{trip}/generate-itinerary — Simulates AI itinerary drafting: waits briefly, then
-    // creates a templated itinerary (days, flights, accommodation) for the trip.
+    // POST /api/trips/{trip}/generate-itinerary
     public function generateItinerary(Request $request, Trip $trip): JsonResponse
     {
+        // External API calls (flights, hotels, events) + AI generation can easily exceed 30 s.
+        set_time_limit(300);
+
         if ($trip->company_id !== UserHelper::user_company($request)->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
         $preferences = $request->validate([
-            'budget' => 'nullable|string|max:50',
-            'style' => 'nullable|string|max:50',
-            'priorities' => 'nullable|array',
-            'priorities.*' => 'string|max:50',
-            'notes' => 'nullable|string',
-            'start_city' => 'nullable|string|max:100',
+            'budget'         => 'nullable|string|max:50',
+            'style'          => 'nullable|string|max:50',
+            'priorities'     => 'nullable|array',
+            'priorities.*'   => 'string|max:50',
+            'notes'          => 'nullable|string',
+            'start_city'     => 'nullable|string|max:100',
+            'provider'       => 'nullable|string|in:gemini,openai,anthropic,ollama',
+            // Specific model variant selected in the UI (e.g. "claude-sonnet-5", "gpt-4o").
+            // Provider is inferred from the model prefix when not explicitly set.
+            'model'                  => 'nullable|string|max:100',
+            'include_flights'         => 'nullable|boolean',
+            'include_stays'          => 'nullable|boolean',
+            'include_events'         => 'nullable|boolean',
+            // Legacy single-leg flight schedule hints (kept for backward compat).
+            'flight_departure_time'  => 'nullable|string|max:20',
+            'return_flight_time'     => 'nullable|string|max:20',
+            // Multi-city / multi-leg flight schedule (supersedes the single-leg fields above).
+            'flight_legs'            => 'nullable|array',
+            'flight_legs.*.label'    => 'nullable|string|max:100',
+            'flight_legs.*.date'     => 'nullable|string|max:20',
+            'flight_legs.*.time'     => 'nullable|string|max:10',
         ]);
 
-        // Simulate AI processing time — this is a template generator, not a real AI call,
-        // but the frontend shows a "Meridian is building options…" loading screen while it
-        // waits, so we deliberately take a few seconds instead of responding instantly.
-        sleep(4);
-
-        // Use the trip's own dates if set, otherwise default to a 5-day trip starting next week.
-        // Day count is clamped to [1, 14] so a bad/huge date range can't generate hundreds of rows.
         $startDate = $trip->start_date ? Carbon::parse($trip->start_date) : Carbon::now()->addWeek();
-        $endDate = $trip->end_date ? Carbon::parse($trip->end_date) : $startDate->copy()->addDays(4);
-        $dayCount = max(1, min(14, $startDate->diffInDays($endDate) + 1));
+        $endDate   = $trip->end_date   ? Carbon::parse($trip->end_date)   : $startDate->copy()->addDays(4);
+        $startCity = $preferences['start_city'] ?? null;
+        $userId    = $request->user()->user_id;
 
-        // Name this itinerary the next unused letter (Option A, B, C...) based on how many
-        // itineraries already exist for the trip, so re-generating creates a new option
-        // rather than overwriting the previous one.
-        $optionLetter = chr(65 + ($trip->itineraries()->count() % 26));
+        // Delete all previous AI-generated (draft) itineraries so each run gives a fresh set.
+        $trip->itineraries()->where('status', ItineraryStatus::DRAFT->value)->each(function (Itinerary $old) {
+            $old->itineraryDays()->each(fn ($d) => $d->destinations()->delete());
+            $old->itineraryDays()->delete();
+            $old->itineraryFlights()->delete();
+            $old->itineraryAccommodation()->delete();
+            $old->delete();
+        });
 
-        // Fold any traveler preferences the frontend collected (GenerateItineraryModal) into
-        // the itinerary description — purely cosmetic, doesn't change what gets generated.
-        $descriptionParts = ['Auto-generated itinerary based on your trip brief.'];
-        if (!empty($preferences['budget'])) {
-            $descriptionParts[] = "Budget: {$preferences['budget']}.";
-        }
-        if (!empty($preferences['style'])) {
-            $descriptionParts[] = "Style: {$preferences['style']}.";
-        }
-        if (!empty($preferences['priorities'])) {
-            $descriptionParts[] = 'Priorities: ' . implode(', ', $preferences['priorities']) . '.';
+        // --- AI path ---
+        $aiService = new MeridianAiService();
+
+        if ($aiService->isReachable()) {
+            $contextService = new TripContextService();
+            $cache          = new AiResponseCache();
+            $builder        = new ItineraryBuilderService();
+
+            $context  = $contextService->build($trip, $preferences);
+            $cacheKey = $cache->makeKey($trip->trip_id, $context['trip_spec'], $preferences);
+            $aiResult = $cache->get($cacheKey);
+
+            // Collect source URLs as the searches run so we can store them on each itinerary.
+            $sourceLinks = [];
+
+            if (!$aiResult) {
+                // --- External APIs: enrich AI payload with real flights, hotels & events ---
+                $flightCandidates = [];
+                $stayCandidates   = [];
+                $eventCandidates  = [];
+
+                $checkIn    = $startDate->toDateString();
+                $checkOut   = $endDate->toDateString();
+                $guestCount = max(1, $trip->customers()->count());
+                $destText   = $trip->description ?? $trip->trip_name ?? '';
+                $destCity   = self::extractDestinationCity($destText);
+
+                $includeFlights = (bool) ($preferences['include_flights'] ?? true);
+                $includeStays   = (bool) ($preferences['include_stays']   ?? true);
+                $includeEvents  = (bool) ($preferences['include_events']  ?? true);
+
+                // Booking.com via RapidAPI: richer hotel data (stars, reviews, real pricing)
+                if ($includeStays && config('services.hotels_rapidapi.key') && $destCity) {
+                    try {
+                        $bookingResults = (new BookingComService())->searchByCity($destCity, $checkIn, $checkOut, $guestCount, 8);
+                        $stayCandidates = $bookingResults['results'] ?? [];
+                        if (!empty($stayCandidates)) {
+                            // Construct a Booking.com search URL for the agent to verify options.
+                            $sourceLinks['hotels_url'] = 'https://www.booking.com/searchresults.html?'
+                                . http_build_query(['ss' => $destCity, 'checkin' => $checkIn, 'checkout' => $checkOut, 'group_adults' => $guestCount]);
+                        }
+                    } catch (\Throwable) {}
+                }
+
+                // SerpApi: flights + fallback hotel search if Booking.com returned nothing
+                if (config('services.serpapi.key')) {
+                    $serpApi = new SerpApiService();
+
+                    if ($includeFlights) {
+                        $departureCity = $startCity ?? null;
+                        if ($departureCity && $destCity) {
+                            $depIata = self::cityToIata($departureCity);
+                            $arrIata = self::cityToIata($destCity);
+                            if ($depIata && $arrIata) {
+                                try {
+                                    $flightResults    = $serpApi->searchFlights($depIata, $arrIata, $checkIn, $checkOut);
+                                    $flightCandidates = array_slice($flightResults['results'] ?? [], 0, 6);
+                                    if ($flightResults['google_flights_url'] ?? null) {
+                                        $sourceLinks['flights_url'] = $flightResults['google_flights_url'];
+                                    }
+                                } catch (\Throwable) {}
+                            }
+                        }
+                    }
+
+                    if ($includeStays && empty($stayCandidates) && $destCity) {
+                        try {
+                            $hotelResults   = $serpApi->searchHotels($destCity, $checkIn, $checkOut, $guestCount);
+                            $stayCandidates = array_slice($hotelResults['results'] ?? [], 0, 8);
+                            // Use first property link as the representative hotels source URL.
+                            $firstLink = $stayCandidates[0]['link'] ?? null;
+                            if ($firstLink) {
+                                $sourceLinks['hotels_url'] = 'https://www.google.com/travel/hotels?q=' . urlencode($destCity);
+                            }
+                        } catch (\Throwable) {}
+                    }
+                }
+
+                // Ticketmaster: real events at the destination
+                if ($includeEvents && config('services.ticketmaster.key') && $destCity) {
+                    try {
+                        $eventResults    = (new TicketmasterService())->searchEvents($destCity, $checkIn, $checkOut, null, 10);
+                        $eventCandidates = $eventResults['results'] ?? [];
+                        if (!empty($eventCandidates)) {
+                            $sourceLinks['events_url'] = 'https://www.ticketmaster.com/search?q=' . urlencode($destCity);
+                        }
+                    } catch (\Throwable) {}
+                }
+
+                // Resolve provider: explicit > inferred from model prefix > null (use AI service default).
+                $selectedModel = $preferences['model'] ?? null;
+                $provider      = $preferences['provider'] ?? self::modelToProvider($selectedModel);
+                $prefsPayload  = empty($preferences) ? new \stdClass() : $preferences;
+
+                $aiPayload = [
+                    'trip_brief'         => $context['trip_brief'],
+                    'trip_spec'          => $context['trip_spec'],
+                    'preferences'        => $prefsPayload,
+                    'answered_questions' => [],
+                    'flight_candidates'  => $flightCandidates,
+                    'stay_candidates'    => $stayCandidates,
+                    'event_candidates'   => $eventCandidates,
+                    'num_options'        => 3,
+                ];
+                if ($provider) {
+                    $aiPayload['provider'] = $provider;
+                }
+                if ($selectedModel) {
+                    $aiPayload['model'] = $selectedModel;
+                }
+
+                $aiResult = $aiService->generateItinerary($aiPayload);
+                $cache->put($cacheKey, $aiResult);
+            }
+
+            $itineraries = $builder->buildAll(
+                $aiResult,
+                $trip->trip_id,
+                $userId,
+                $startCity,
+                $startDate,
+                $endDate,
+                $sourceLinks ?: null
+            );
+
+            $primary = $itineraries->first();
+            return response()->json([
+                'itinerary'         => $primary,
+                'all_options'       => $itineraries->values(),
+                'provider_used'     => $aiResult['provider_used'] ?? null,
+                'skipped_providers' => $aiResult['skipped_providers'] ?? [],
+            ], 201);
         }
 
+        // --- Fallback when meridian-ai is offline: return a single blank draft ---
+        $dayCount  = max(1, min(14, $startDate->diffInDays($endDate) + 1));
         $itinerary = Itinerary::create([
-            'itinerary_id' => IdGeneratorService::generateId('ITN'),
-            'trip_id' => $trip->trip_id,
-            'created_by' => $request->user()->user_id,
-            'itinerary_name' => "Option {$optionLetter}",
-            'start_city' => $preferences['start_city'] ?? null,
-            'description' => implode(' ', $descriptionParts),
-            'start_date' => $startDate->toDateString(),
-            'end_date' => $endDate->toDateString(),
-            'status' => ItineraryStatus::DRAFT->value,
+            'itinerary_id'   => IdGeneratorService::generateId('ITN'),
+            'trip_id'        => $trip->trip_id,
+            'created_by'     => $userId,
+            'itinerary_name' => 'Draft itinerary',
+            'start_city'     => $startCity,
+            'description'    => 'AI service is currently offline. Fill in the details manually.',
+            'start_date'     => $startDate->toDateString(),
+            'end_date'       => $endDate->toDateString(),
+            'status'         => ItineraryStatus::DRAFT->value,
         ]);
 
-        // A small rotating set of generic day plans. They cycle (via % count()) if the trip
-        // is longer than the template list, and the very last day is always "Departure"
-        // (unless the trip is only 1 day long, in which case there's nothing to cycle).
-        $dayTemplates = [
-            ['title' => 'Arrival & check-in', 'description' => 'Land, transfer to accommodation, and settle in.'],
-            ['title' => 'City highlights & orientation', 'description' => 'Guided tour of the main sights and neighborhoods.'],
-            ['title' => 'Full-day excursion', 'description' => 'A signature day trip or activity for the destination.'],
-            ['title' => 'Leisure & optional activities', 'description' => 'Free time with optional add-ons.'],
-            ['title' => 'Culture & cuisine', 'description' => 'Local food experience and a cultural site visit.'],
-            ['title' => 'Free day', 'description' => 'Unstructured day to rest or explore independently.'],
-        ];
-        $departureTemplate = ['title' => 'Departure', 'description' => 'Check out and transfer to the airport.'];
-
+        $dayTitles = ['Arrival & check-in', 'City highlights', 'Excursion', 'Leisure', 'Culture & cuisine', 'Free day'];
         for ($i = 0; $i < $dayCount; $i++) {
-            $isLastDay = $i === $dayCount - 1;
-            $template = ($isLastDay && $dayCount > 1) ? $departureTemplate : $dayTemplates[$i % count($dayTemplates)];
-
             ItineraryDay::create([
                 'itinerary_day_id' => IdGeneratorService::generateId('ITD'),
-                'itinerary_id' => $itinerary->itinerary_id,
-                'day_number' => $i + 1,
-                'date' => $startDate->copy()->addDays($i)->toDateString(),
-                'title' => $template['title'],
-                'description' => $template['description'],
+                'itinerary_id'     => $itinerary->itinerary_id,
+                'day_number'       => $i + 1,
+                'date'             => $startDate->copy()->addDays($i)->toDateString(),
+                'title'            => $i === $dayCount - 1 && $dayCount > 1 ? 'Departure' : ($dayTitles[$i % count($dayTitles)]),
+                'description'      => null,
             ]);
         }
 
-        // One outbound + one return flight, and a single accommodation booking spanning the
-        // whole stay. Destination airport is always a placeholder ("TBD") since there's no
-        // real flight search behind this template — but the departure/return-arrival side is
-        // the traveler's own start_city when one was given, instead of also being "TBD".
-        $originAirport = $preferences['start_city'] ?? 'TBD';
-        ItineraryFlight::create([
-            'flight_id' => IdGeneratorService::generateId('FLT'),
-            'itinerary_id' => $itinerary->itinerary_id,
-            'airline' => 'Meridian Air',
-            'flight_number' => 'MA ' . random_int(100, 999),
-            'departure_airport' => $originAirport,
-            'arrival_airport' => 'TBD',
-            'departure_datetime' => $startDate->copy()->setTime(8, 0)->toDateTimeString(),
-            'arrival_datetime' => $startDate->copy()->setTime(14, 0)->toDateTimeString(),
-            'cost' => 1200,
-            'currency' => 'GHS',
-            'status' => FlightStatus::PENDING->value,
-        ]);
+        $loaded = $itinerary->load(['itineraryDays.destinations.destination', 'itineraryFlights', 'itineraryAccommodation']);
+        return response()->json(['itinerary' => $loaded, 'all_options' => [$loaded]], 201);
+    }
 
-        ItineraryFlight::create([
-            'flight_id' => IdGeneratorService::generateId('FLT'),
-            'itinerary_id' => $itinerary->itinerary_id,
-            'airline' => 'Meridian Air',
-            'flight_number' => 'MA ' . random_int(100, 999),
-            'departure_airport' => 'TBD',
-            'arrival_airport' => $originAirport,
-            'departure_datetime' => $endDate->copy()->setTime(16, 0)->toDateTimeString(),
-            'arrival_datetime' => $endDate->copy()->setTime(22, 0)->toDateTimeString(),
-            'cost' => 1200,
-            'currency' => 'GHS',
-            'status' => FlightStatus::PENDING->value,
-        ]);
+    // Extracts a plausible destination city from a trip description or name.
+    // Used to determine the arrival airport for SerpApi flight search.
+    private static function extractDestinationCity(string $text): ?string
+    {
+        // "in/to/at <City>" — most trip descriptions follow this pattern
+        if (preg_match('/\b(?:in|to|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/u', $text, $m)) {
+            return $m[1];
+        }
+        // First standalone proper noun (capitalised word after whitespace)
+        if (preg_match('/(?<=\s)([A-Z][a-z]{2,})\b/', $text, $m)) {
+            return $m[1];
+        }
+        return null;
+    }
 
-        ItineraryAccommodation::create([
-            'accommodation_id' => IdGeneratorService::generateId('ACC'),
-            'itinerary_id' => $itinerary->itinerary_id,
-            'accommodation_name' => 'Recommended stay',
-            'check_in_date' => $startDate->toDateString(),
-            'check_out_date' => $endDate->toDateString(),
-            'room_type' => 'Standard room',
-            'cost' => 400 * max(1, $dayCount - 1), // ~400 GHS/night, nights = days - 1 (min 1 night).
-            'currency' => 'GHS',
-            'status' => AccommodationStatus::PENDING->value,
-        ]);
+    // Maps a specific model ID (e.g. "claude-sonnet-5", "gpt-4o", "gemini-2.0-flash") to its
+    // provider name understood by meridian-ai. Returns null if unrecognised (service uses default).
+    private static function modelToProvider(?string $model): ?string
+    {
+        if (!$model) return null;
+        if (str_starts_with($model, 'claude'))  return 'anthropic';
+        if (str_starts_with($model, 'gpt'))     return 'openai';
+        if (str_starts_with($model, 'gemini'))  return 'gemini';
+        if (str_starts_with($model, 'llama') || str_starts_with($model, 'mistral')) return 'ollama';
+        return null;
+    }
 
-        return response()->json($itinerary->load([
-            'itineraryDays.destinations.destination',
-            'itineraryFlights',
-            'itineraryAccommodation',
-        ]), 201);
+    // Resolves a city name to its primary airport IATA code using the seeded airports table.
+    // Prefers exact city-name matches and breaks ties by picking the alphabetically-first code
+    // (major hub airports tend to sort first — ACC, JFK, LHR — over regional ones).
+    private static function cityToIata(string $city): ?string
+    {
+        $airport = Airport::whereRaw('LOWER(city) LIKE ?', ['%' . strtolower(trim($city)) . '%'])
+            ->orderByRaw('CASE WHEN LOWER(city) = ? THEN 0 ELSE 1 END', [strtolower(trim($city))])
+            ->orderBy('iata_code')
+            ->first(['iata_code']);
+
+        return $airport?->iata_code;
     }
 }

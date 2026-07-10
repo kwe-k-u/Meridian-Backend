@@ -173,6 +173,13 @@ class AuthController extends Controller
         }
     }
 
+    // GET /api/auth/me — Returns the current user with companies (pivot) eager-loaded.
+    // Used by the frontend on startup to refresh stale cached user data.
+    public function me(Request $request): JsonResponse
+    {
+        return response()->json(['user' => $request->user()->load('companies')]);
+    }
+
     // PUT /api/auth/profile — Updates the authenticated user's display name, phone, or avatar.
     public function updateProfile(Request $request): JsonResponse
     {
