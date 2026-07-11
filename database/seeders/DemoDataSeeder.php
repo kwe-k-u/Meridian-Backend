@@ -63,7 +63,7 @@ class DemoDataSeeder extends Seeder
             $user = User::create([
                 'user_id' => IdGeneratorService::generateId('USR'),
                 'email' => $email,
-                'display_name' => 'Demo User',
+                'display_name' => 'Meridian Demo',
                 'password' => Hash::make($password),
                 'status' => UserStatus::ACTIVE,
                 'last_login' => now(),
