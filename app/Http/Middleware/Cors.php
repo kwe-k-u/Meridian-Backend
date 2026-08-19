@@ -13,6 +13,10 @@ class Cors
         'http://127.0.0.1:5173',
         'http://localhost:5174',
         'http://127.0.0.1:5174',
+         "https://meridiantravel.tech",
+         "https://app.meridiantravel.tech",
+         "https://www.meridiantravel.tech",
+         "https://www.app.meridiantravel.tech"
     ];
 
     public function handle(Request $request, Closure $next): Response
