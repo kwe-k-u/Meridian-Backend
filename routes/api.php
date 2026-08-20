@@ -55,6 +55,7 @@ Route::get('/currency-rates', [CurrencyController::class, 'index']);
 Route::prefix('public')->group(function () {
     Route::get('/trips/{trip}', [TripController::class, 'publicShow']);
     Route::get('/trips/{trip}/costs', [TripController::class, 'publicCosts']);
+    Route::post('/trips/{trip}/itineraries/{itinerary}/accept', [TripController::class, 'acceptItinerary']);
     Route::post('/payments/moolre/trip', [MoolrePaymentController::class, 'initiatePublicTripPayment']);
     Route::get('/payments/moolre/{transaction}/status', [MoolrePaymentController::class, 'publicStatus']);
 });

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\TransactionStatus;
 use App\Helpers\ItineraryHelper;
 use App\Helpers\UserHelper;
+use App\Mail\PaymentConfirmationMail;
 use App\Models\CompanySubscription;
 use App\Models\SubscriptionPayment;
 use App\Models\Transaction;
@@ -12,10 +13,12 @@ use App\Models\Trip;
 use App\Models\TripPayment;
 use App\Services\IdGeneratorService;
 use App\Services\MoolreService;
+use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 
 /**
  * Hosted-checkout mobile-money payments via Moolre (https://docs.moolre.com/).
@@ -309,9 +312,38 @@ class MoolrePaymentController extends Controller
 
         if ($txStatus == 1) {
             $transaction->update(['status' => TransactionStatus::COMPLETED->value, 'paid_at' => now()]);
+            $this->sendPaymentConfirmationEmail($transaction);
         } elseif (($result['status'] ?? null) != 1 && !empty($result['code'])) {
             // An explicit non-success response (not just a transient HTTP hiccup) — treat as failed.
             $transaction->update(['status' => TransactionStatus::FAILED->value]);
+        }
+    }
+
+    // Sends a receipt to the trip's customer(s) once a trip payment transaction settles.
+    // Subscription payments have no traveler-facing recipient, so those are skipped.
+    private function sendPaymentConfirmationEmail(Transaction $transaction): void
+    {
+        $transaction->loadMissing('tripPayment.trip.customers', 'tripPayment.trip.company');
+        $trip = $transaction->tripPayment?->trip;
+        if (!$trip) {
+            return;
+        }
+
+        foreach ($trip->customers as $customer) {
+            if (!$customer->email) {
+                continue;
+            }
+            try {
+                Mail::to($customer->email)->send(new PaymentConfirmationMail(
+                    trim("{$customer->first_name} {$customer->last_name}") ?: 'Traveler',
+                    $trip->trip_name,
+                    $trip->company->company_name ?? 'Meridian',
+                    (float) $transaction->amount,
+                    $transaction->currency,
+                ));
+            } catch (Exception $e) {
+                Log::error('Failed to send payment confirmation email', ['transaction_id' => $transaction->transaction_id, 'customer_id' => $customer->customer_id, 'error' => $e->getMessage()]);
+            }
         }
     }
 }

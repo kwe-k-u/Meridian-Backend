@@ -2,9 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\InvitationMail;
+use App\Models\Company;
 use App\Models\Invitation;
+use App\Models\User;
+use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rules\Enum;
 use App\Enums\CompanyRole;
 use App\Enums\InvitationStatus;
@@ -40,6 +46,21 @@ class InvitationController extends Controller
         ]);
 
         $invitation = Invitation::create($validated);
+
+        try {
+            $company = Company::find($validated['company_id']);
+            $inviter = User::find($validated['invited_by']);
+            $acceptUrl = rtrim(config('services.moolre.frontend_url'), '/') . '/accept-invite?token=' . urlencode($validated['token']);
+
+            Mail::to($validated['email'])->send(new InvitationMail(
+                $company->company_name ?? 'Meridian',
+                $inviter->display_name ?? 'A team member',
+                $validated['role'] ?? 'member',
+                $acceptUrl,
+            ));
+        } catch (Exception $e) {
+            Log::error('Failed to send invitation email', ['invitation_token' => $invitation->token, 'error' => $e->getMessage()]);
+        }
 
         return response()->json($invitation, 201);
     }

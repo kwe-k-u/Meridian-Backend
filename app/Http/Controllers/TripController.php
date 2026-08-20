@@ -9,12 +9,18 @@ use App\Enums\TripCustomerRole;
 use App\Enums\TripStatus;
 use App\Helpers\ItineraryHelper;
 use App\Helpers\UserHelper;
+use App\Mail\ItineraryAcceptedCustomerMail;
+use App\Mail\ItineraryAcceptedMail;
+use App\Mail\TripStatusChangedMail;
 use App\Models\Customer;
 use App\Models\Itinerary;
 use App\Models\ItineraryAccommodation;
 use App\Models\ItineraryDay;
 use App\Models\ItineraryFlight;
 use App\Models\Trip;
+use Exception;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use App\Services\AI\AiResponseCache;
 use App\Services\AI\ItineraryBuilderService;
 use App\Services\AI\MeridianAiService;
@@ -132,7 +138,28 @@ class TripController extends Controller
             'status' => ['required', new Enum(TripStatus::class)],
         ]);
 
+        $previousStatus = $trip->status?->value;
         $trip->update($validated);
+        $statusChanged = $previousStatus !== $validated['status'];
+
+        if ($statusChanged) {
+            $trip->loadMissing(['company', 'customers']);
+            foreach ($trip->customers as $customer) {
+                if (!$customer->email) {
+                    continue;
+                }
+                try {
+                    Mail::to($customer->email)->send(new TripStatusChangedMail(
+                        trim("{$customer->first_name} {$customer->last_name}") ?: 'Traveler',
+                        $trip->trip_name,
+                        $trip->company->company_name ?? 'Meridian',
+                        $validated['status'],
+                    ));
+                } catch (Exception $e) {
+                    Log::error('Failed to send trip status changed email', ['trip_id' => $trip->trip_id, 'customer_id' => $customer->customer_id, 'error' => $e->getMessage()]);
+                }
+            }
+        }
 
         return response()->json($trip->load([
             'company',
@@ -172,6 +199,52 @@ class TripController extends Controller
             'itineraries.itineraryFlights',
             'itineraries.itineraryAccommodation',
         ]));
+    }
+
+    // POST /api/public/trips/{trip}/itineraries/{itinerary}/accept — Marks an itinerary option
+    // as the one the traveler chose (CONFIRMED). Reachable from the same shareable /travel/{tripId}
+    // link as publicShow() — trip_id/itinerary_id are the shared secret, same trust model.
+    public function acceptItinerary(Trip $trip, Itinerary $itinerary): JsonResponse
+    {
+        if ($itinerary->trip_id !== $trip->trip_id) {
+            return response()->json(['message' => 'Itinerary not found.'], 404);
+        }
+
+        $itinerary->update(['status' => ItineraryStatus::CONFIRMED->value]);
+
+        $trip->loadMissing(['company', 'createdBy', 'customers']);
+        $customerName = trim($trip->customers->map(fn ($c) => trim("{$c->first_name} {$c->last_name}"))->filter()->first() ?? '') ?: 'The traveler';
+
+        try {
+            if ($trip->createdBy?->email) {
+                Mail::to($trip->createdBy->email)->send(new ItineraryAcceptedMail(
+                    $trip->createdBy->display_name ?? 'Team',
+                    $itinerary->itinerary_name ?? 'Itinerary',
+                    $trip->trip_name,
+                    $customerName,
+                ));
+            }
+        } catch (Exception $e) {
+            Log::error('Failed to send itinerary accepted staff email', ['trip_id' => $trip->trip_id, 'itinerary_id' => $itinerary->itinerary_id, 'error' => $e->getMessage()]);
+        }
+
+        foreach ($trip->customers as $customer) {
+            if (!$customer->email) {
+                continue;
+            }
+            try {
+                Mail::to($customer->email)->send(new ItineraryAcceptedCustomerMail(
+                    trim("{$customer->first_name} {$customer->last_name}") ?: 'Traveler',
+                    $itinerary->itinerary_name ?? 'Itinerary',
+                    $trip->trip_name,
+                    $trip->company->company_name ?? 'Meridian',
+                ));
+            } catch (Exception $e) {
+                Log::error('Failed to send itinerary accepted customer email', ['trip_id' => $trip->trip_id, 'customer_id' => $customer->customer_id, 'error' => $e->getMessage()]);
+            }
+        }
+
+        return response()->json($itinerary->fresh());
     }
 
     // GET /api/public/trips/{trip}/costs — Public equivalent of costs(); same response shape

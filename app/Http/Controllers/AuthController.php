@@ -3,11 +3,15 @@
 namespace App\Http\Controllers;
 
 use App\Enums\CompanyRole;
+use App\Mail\PasswordResetMail;
+use App\Mail\WelcomeMail;
 use App\Models\User;
 use App\Enums\UserStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
 use Exception;
@@ -156,6 +160,12 @@ class AuthController extends Controller
 
             DB::commit();
 
+            try {
+                Mail::to($user->email)->send(new WelcomeMail($user->display_name, $company->company_name));
+            } catch (Exception $e) {
+                Log::error('Failed to send welcome email', ['user_id' => $user->user_id, 'error' => $e->getMessage()]);
+            }
+
             $token = $user->createToken('meridian_auth_token')->plainTextToken;
             return response()->json([
                 'message' => 'Company and owner registration completed successfully.',
@@ -226,6 +236,15 @@ class AuthController extends Controller
                 'token' => bcrypt($token),
                 'created_at' => now()
             ]);
+
+            $resetUrl = rtrim(config('services.moolre.frontend_url'), '/')
+                . '/reset-password?token=' . urlencode($token) . '&email=' . urlencode($email);
+
+            try {
+                Mail::to($user->email)->send(new PasswordResetMail($user->display_name, $resetUrl));
+            } catch (Exception $e) {
+                Log::error('Failed to send password reset email', ['email' => $email, 'error' => $e->getMessage()]);
+            }
 
             return response()->json([
                 'message' => 'If your email is registered in our database, you will receive a password reset link shortly.',
