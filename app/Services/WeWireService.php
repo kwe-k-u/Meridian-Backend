@@ -23,17 +23,33 @@ class WeWireService
     private string $baseUrl;
     private ?string $apiKey;
     private ?string $webhookSecret;
+    private bool $simulate;
 
     public function __construct()
     {
         $this->baseUrl = rtrim(config('services.wewire.base_url'), '/');
         $this->apiKey = config('services.wewire.api_key');
         $this->webhookSecret = config('services.wewire.webhook_secret');
+        // SIMULATED — see WEWIRE_SIMULATE. WeWire's KYC and beneficiary-creation endpoints are
+        // currently broken on their end, so createSubCustomer/submitBusinessKyc/
+        // addBeneficialOwner/submitKycForReview/createBeneficiary below fake a success response
+        // instead of calling out. requestVirtualAccount/initiatePayout/everything else are
+        // untouched and still hit the real API. Flip WEWIRE_SIMULATE=false once WeWire's side
+        // is fixed — see the memory note left on this for the full picture.
+        $this->simulate = (bool) config('services.wewire.simulate');
     }
 
     // POST /v1/subcustomers — registers the company itself as a WeWire BUSINESS sub-customer.
     public function createSubCustomer(array $businessData): array
     {
+        if ($this->simulate) {
+            return [
+                'id' => 'SIM_SUB_' . strtoupper(\Illuminate\Support\Str::random(10)),
+                'status' => 'ACTIVE',
+                'onboardingStatus' => 'DRAFT',
+            ];
+        }
+
         return $this->post('/v1/subcustomers', array_merge(['type' => 'BUSINESS'], $businessData));
     }
 
@@ -57,6 +73,10 @@ class WeWireService
     // POST /v1/subcustomers/{id}/kyc — submits company details + questionnaire (type=BUSINESS).
     public function submitBusinessKyc(string $subCustomerId, array $companyDetails, array $questionnaire): array
     {
+        if ($this->simulate) {
+            return []; // SIMULATED — success, no error keys (see WeWireOnboardingController::submitKyc).
+        }
+
         return $this->post("/v1/subcustomers/{$subCustomerId}/kyc", [
             'type' => 'BUSINESS',
             'data' => [
@@ -69,6 +89,10 @@ class WeWireService
     // POST /v1/subcustomers/{id}/beneficial-owners
     public function addBeneficialOwner(string $subCustomerId, array $ownerData): array
     {
+        if ($this->simulate) {
+            return []; // SIMULATED — success, no error keys.
+        }
+
         return $this->post("/v1/subcustomers/{$subCustomerId}/beneficial-owners", array_merge($ownerData, [
             'idempotencyKey' => (string) \Illuminate\Support\Str::uuid(),
         ]));
@@ -77,6 +101,12 @@ class WeWireService
     // POST /v1/subcustomers/{id}/kyc/submit — moves the sub-customer to IN_REVIEW.
     public function submitKycForReview(string $subCustomerId): array
     {
+        if ($this->simulate) {
+            // SIMULATED — sits in IN_REVIEW forever since no webhook will ever confirm it;
+            // Settings.tsx's KYC banner is softened accordingly rather than treating this as blocking.
+            return ['onboardingStatus' => 'IN_REVIEW'];
+        }
+
         return $this->post("/v1/subcustomers/{$subCustomerId}/kyc/submit", []);
     }
 
@@ -94,6 +124,12 @@ class WeWireService
     // POST /v1/beneficiaries — registers a payout destination bank account.
     public function createBeneficiary(array $beneficiaryData): array
     {
+        if ($this->simulate) {
+            // SIMULATED — see the constructor comment. Every other beneficiary-adjacent flow
+            // (virtual accounts, payouts) still calls the real API; only account *creation* is faked.
+            return ['id' => 'SIM_BEN_' . strtoupper(\Illuminate\Support\Str::random(10))];
+        }
+
         return $this->post('/v1/beneficiaries', $beneficiaryData);
     }
 

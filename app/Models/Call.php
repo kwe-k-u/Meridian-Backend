@@ -17,6 +17,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $organized_by Foreign key to the user who organized the call.
  * @property \Carbon\Carbon|null $started_at When the call started.
  * @property \Carbon\Carbon|null $ended_at When the call ended.
+ * @property string|null $google_event_id Set when this call was created by/detected from the
+ *     company's connected Google Calendar (CalendarWatcherJob or CallController::scheduleWithMeet)
+ *     — null for a manually logged call with no Calendar backing.
+ * @property bool $excluded When true, CalendarWatcherJob leaves this call alone (no future
+ *     auto-tracking) even though it still originated from a Calendar event.
  */
 class Call extends Model
 {
@@ -37,11 +42,14 @@ class Call extends Model
         'meeting_link',
         'notes',
         'transcript',
+        'google_event_id',
+        'excluded',
     ];
 
     protected $casts = [
         'started_at' => 'datetime',
         'ended_at' => 'datetime',
+        'excluded' => 'boolean',
     ];
 
     public function trip(): BelongsTo

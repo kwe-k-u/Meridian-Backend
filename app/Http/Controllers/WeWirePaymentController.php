@@ -29,6 +29,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Validation\Rule;
 
 /**
  * The customer-facing collection page's backend, and the WeWire webhook receiver.
@@ -564,16 +565,22 @@ class WeWirePaymentController extends Controller
             ->groupBy('source_trip_id')
             ->map(fn($rows) => $rows->sum('amount'));
 
-        $balances = $plans->map(function (PaymentPlan $plan) use ($disbursedByTrip, $company) {
+        // Any beneficiary in a matching currency can now be paid out to (see payoutTrip()) —
+        // not just the one a virtual account happens to auto-disburse to. Preferring an
+        // 'agency'-type one keeps the Dashboard's one-click "pay agency in full" button working
+        // without a second lookup; grouped by currency once rather than per-trip.
+        $beneficiariesByCurrency = $company->wewireBeneficiaries()->get()->groupBy('currency');
+        $activeAccountCurrencies = WeWireVirtualAccount::where('company_id', $company->company_id)
+            ->where('status', VirtualAccountStatus::ACTIVE->value)
+            ->pluck('currency')->flip();
+
+        $balances = $plans->map(function (PaymentPlan $plan) use ($disbursedByTrip, $beneficiariesByCurrency, $activeAccountCurrencies) {
             $collected = $this->collectedViaWeWire($plan);
             $disbursed = (float) ($disbursedByTrip[$plan->trip_id] ?? 0);
             $held = round($collected - $disbursed, 2);
 
-            $account = WeWireVirtualAccount::where('company_id', $company->company_id)
-                ->where('currency', $plan->currency)
-                ->where('status', VirtualAccountStatus::ACTIVE->value)
-                ->first();
-            $hasBeneficiary = $account && $account->beneficiary_account_id;
+            $candidates = $beneficiariesByCurrency[$plan->currency] ?? collect();
+            $beneficiary = $candidates->firstWhere('beneficiary_type', 'agency') ?? $candidates->first();
 
             return [
                 'trip_id' => $plan->trip_id,
@@ -581,16 +588,21 @@ class WeWirePaymentController extends Controller
                 'currency' => $plan->currency,
                 'collected' => $collected,
                 'held_balance' => $held,
-                'can_payout' => $held > 0.01 && $hasBeneficiary,
+                'beneficiary_id' => $beneficiary?->id,
+                'can_payout' => $held > 0.01 && $beneficiary && isset($activeAccountCurrencies[$plan->currency]),
             ];
         })->filter(fn($b) => $b['held_balance'] > 0.01)->values();
 
         return response()->json($balances);
     }
 
-    // POST /api/trips/{trip}/payout — manually pays an agency out for everything currently
-    // held for one trip (see tripBalances() for how "held" is computed), to the company's
-    // beneficiary account in that trip's currency.
+    // POST /api/trips/{trip}/payout — pays someone out of a trip's held balance: the agency
+    // itself (omit line_item_*, matches the original one-click "pay agency" flow from the
+    // dashboard) or a specific trip service provider — the airline, hotel, or activity vendor
+    // for one line item (see TripPayoutsSection on the frontend). `amount` is optional and
+    // defaults to the full currently-held balance; when given, it must not exceed it — the
+    // caller chooses exactly how much a given provider gets, which need not match the
+    // itinerary's listed cost for that item.
     public function payoutTrip(Request $request, Trip $trip): JsonResponse
     {
         $company = UserHelper::user_company($request);
@@ -598,38 +610,78 @@ class WeWirePaymentController extends Controller
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
-        $plan = $trip->paymentPlan()->with('installments.installmentPayments.transaction')->first();
-        if (!$plan) {
+        $validated = $request->validate([
+            'beneficiary_id' => 'required|string|exists:wewire_beneficiaries,id',
+            'amount' => 'nullable|numeric|min:0.01',
+            'line_item_type' => ['nullable', 'string', Rule::in(['flight', 'accommodation', 'activity'])],
+            'line_item_id' => 'nullable|string|max:100',
+            'line_item_label' => 'nullable|string|max:200',
+        ]);
+
+        $balance = $this->heldBalanceForTrip($trip);
+        if (!$balance) {
             return response()->json(['message' => 'This trip has no payment plan / no WeWire collections yet.'], 422);
         }
-
-        $collected = $this->collectedViaWeWire($plan);
-        $alreadyDisbursed = (float) WeWireDisbursement::where('source_trip_id', $trip->trip_id)
-            ->whereIn('status', [DisbursementStatus::PENDING, DisbursementStatus::SUCCESSFUL])
-            ->sum('amount');
-        $held = round($collected - $alreadyDisbursed, 2);
+        ['plan' => $plan, 'held' => $held] = $balance;
 
         if ($held <= 0.01) {
             return response()->json(['message' => 'Nothing is currently held for this trip.'], 422);
         }
 
-        $account = WeWireVirtualAccount::with('beneficiary')
-            ->where('company_id', $company->company_id)
+        $amount = isset($validated['amount']) ? (float) $validated['amount'] : $held;
+        if ($amount > $held + 0.01) {
+            return response()->json(['message' => "Only {$held} {$plan->currency} is currently held for this trip."], 422);
+        }
+
+        $beneficiary = WeWireBeneficiary::find($validated['beneficiary_id']);
+        if (!$beneficiary || $beneficiary->company_id !== $company->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+        if ($beneficiary->currency !== $plan->currency) {
+            return response()->json(['message' => "That beneficiary is in {$beneficiary->currency}, but this trip's held balance is in {$plan->currency}."], 422);
+        }
+
+        $account = WeWireVirtualAccount::where('company_id', $company->company_id)
             ->where('currency', $plan->currency)
             ->where('status', VirtualAccountStatus::ACTIVE->value)
             ->first();
-        if (!$account || !$account->beneficiary) {
-            return response()->json(['message' => "Add a {$plan->currency} beneficiary account in Settings before paying out this trip."], 422);
+        if (!$account) {
+            return response()->json(['message' => "No active {$plan->currency} virtual account for this company yet."], 422);
         }
 
-        $disbursement = $this->initiateDisbursement($account, $account->beneficiary, $held, $plan->currency, ['source_trip_id' => $trip->trip_id]);
+        $disbursement = $this->initiateDisbursement($account, $beneficiary, $amount, $plan->currency, array_filter([
+            'source_trip_id' => $trip->trip_id,
+            'line_item_type' => $validated['line_item_type'] ?? null,
+            'line_item_id' => $validated['line_item_id'] ?? null,
+            'line_item_label' => $validated['line_item_label'] ?? null,
+        ], fn($v) => $v !== null));
 
         return response()->json($disbursement, 201);
     }
 
+    // Shared by tripBalances() (batch, across many trips) and payoutTrip() (single trip): how
+    // much of what's been collected via WeWire on this trip hasn't been paid out yet, across
+    // *any* beneficiary/line-item — so paying the agency AND several providers off the same
+    // trip can never collectively exceed what was actually collected. Returns null if the
+    // trip has no payment plan (nothing collected yet).
+    private function heldBalanceForTrip(Trip $trip): ?array
+    {
+        $plan = $trip->paymentPlan()->with('installments.installmentPayments.transaction')->first();
+        if (!$plan) {
+            return null;
+        }
+
+        $collected = $this->collectedViaWeWire($plan);
+        $disbursed = (float) WeWireDisbursement::where('source_trip_id', $trip->trip_id)
+            ->whereIn('status', [DisbursementStatus::PENDING, DisbursementStatus::SUCCESSFUL])
+            ->sum('amount');
+
+        return ['plan' => $plan, 'collected' => $collected, 'disbursed' => $disbursed, 'held' => round($collected - $disbursed, 2)];
+    }
+
     // Sum of every *completed* WeWire transaction collected against a plan's installments —
-    // the gross amount available to pay the agency out for, before subtracting anything
-    // already disbursed. Assumes installments.installmentPayments.transaction is eager-loaded.
+    // the gross amount available to pay out, before subtracting anything already disbursed.
+    // Assumes installments.installmentPayments.transaction is eager-loaded.
     private function collectedViaWeWire(PaymentPlan $plan): float
     {
         return round($plan->installments->sum(function (Installment $installment) {

@@ -65,6 +65,20 @@ return [
         'api_key' => env('WEWIRE_API_KEY'),
         'webhook_secret' => env('WEWIRE_WEBHOOK_SECRET'),
         'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+        // Defaults on: WeWire's KYC and beneficiary-creation endpoints are currently broken on
+        // their end, so App\Services\WeWireService fakes those specific calls (only those —
+        // virtual accounts and payouts still hit the real API) until that's fixed. Set
+        // WEWIRE_SIMULATE=false once WeWire confirms KYC/beneficiary creation works again.
+        'simulate' => env('WEWIRE_SIMULATE', true),
+    ],
+
+    // Paystack (https://paystack.com/docs/) — hosted-checkout card/bank payments, currently
+    // used for tour operator subscription payments only. See App\Services\PaystackService.
+    'paystack' => [
+        'base_url' => env('PAYSTACK_BASE_URL', 'https://api.paystack.co'),
+        'secret_key' => env('PAYSTACK_SECRET_KEY'),
+        'public_key' => env('PAYSTACK_PUBLIC_KEY'),
+        'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
     ],
 
     // SerpApi (https://serpapi.com/) — real flight/hotel search for the itinerary builder.
@@ -98,6 +112,15 @@ return [
     'hotels_rapidapi' => [
         'key'  => env('HOTELS_RAPIDAPI_KEY'),
         'host' => env('HOTELS_RAPIDAPI_HOST', 'booking-com15.p.rapidapi.com'),
+    ],
+
+    // Google OAuth (Gmail integration) — see App\Services\Gmail\GmailOAuthService and
+    // App\Http\Controllers\GmailController. redirect_uri must exactly match an authorized
+    // redirect URI configured on the OAuth 2.0 Client in Google Cloud Console.
+    'google' => [
+        'client_id'     => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'redirect_uri'  => env('GOOGLE_REDIRECT_URI'),
     ],
 
 ];

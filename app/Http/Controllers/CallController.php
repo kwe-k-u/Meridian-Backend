@@ -7,8 +7,13 @@ use App\Helpers\CallHelper;
 use App\Helpers\UserHelper;
 use App\Models\Call;
 use App\Models\CallActionItem;
+use App\Models\Customer;
+use App\Models\GmailAccount;
 use App\Models\Trip;
+use App\Services\Gmail\GmailOAuthService;
+use App\Services\Google\GoogleCalendarService;
 use App\Services\IdGeneratorService;
+use DateTime;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\Enum;
@@ -66,6 +71,62 @@ class CallController extends Controller
         return response()->json($call, 201);
     }
 
+    // POST /api/trips/{trip}/calls/schedule — Creates a Google Calendar event with an
+    // auto-generated Meet link (via the company's connected Google account) plus a matching
+    // Call row. Requires Calendar to be connected+enabled (see GmailController) — this doesn't
+    // fall back to a plain manual call if it isn't.
+    public function scheduleWithMeet(Request $request, Trip $trip, GmailOAuthService $oauth): JsonResponse
+    {
+        $company = UserHelper::user_company($request);
+
+        if ($trip->company_id !== $company->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        $account = GmailAccount::where('company_id', $company->company_id)->first();
+        if (!$account || !$account->calendar_enabled || $account->status !== 'active') {
+            return response()->json(['message' => 'Connect Google Calendar in Settings first.'], 422);
+        }
+        if (!$account->meet_tracking_enabled) {
+            return response()->json(['message' => 'Turn on Google Meet in Settings first.'], 422);
+        }
+
+        $validated = $request->validate([
+            'title' => 'required|string|max:200',
+            'started_at' => 'required|date',
+            'ended_at' => 'required|date|after:started_at',
+            'customer_id' => 'required|string|exists:customers,customer_id',
+        ]);
+
+        $customer = Customer::where('company_id', $company->company_id)
+            ->where('customer_id', $validated['customer_id'])
+            ->first();
+
+        if (!$customer || !$customer->email) {
+            return response()->json(['message' => 'That traveler needs an email address on file first.'], 422);
+        }
+
+        $calendar = new GoogleCalendarService($account, $oauth);
+        $event = $calendar->createMeetEvent(
+            $validated['title'],
+            new DateTime($validated['started_at']),
+            new DateTime($validated['ended_at']),
+            [$customer->email],
+        );
+
+        $call = Call::create([
+            'call_id' => IdGeneratorService::generateId('CAL'),
+            'trip_id' => $trip->trip_id,
+            'organized_by' => $request->user()->user_id,
+            'title' => $validated['title'],
+            'started_at' => $validated['started_at'],
+            'meeting_link' => $event['hangout_link'],
+            'google_event_id' => $event['event_id'],
+        ]);
+
+        return response()->json($call, 201);
+    }
+
     // GET /api/calls/{call} — Returns a single call with its trip, organizer, and action items
     // (company-scoped).
     public function show(Request $request, Call $call): JsonResponse
@@ -92,6 +153,10 @@ class CallController extends Controller
             'meeting_link' => 'nullable|string|max:500',
             'notes' => 'nullable|string',
             'transcript' => 'nullable|string',
+            // Only meaningful for calendar-originated calls (google_event_id set) — lets an
+            // agent tell CalendarWatcherJob to leave a specific call alone, without disabling
+            // Calendar tracking company-wide.
+            'excluded' => 'nullable|boolean',
         ]);
 
         $call->update($validated);

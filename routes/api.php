@@ -5,15 +5,19 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CallController;
 use App\Http\Controllers\CompanyController;
 use App\Http\Controllers\CompanySubscriptionController;
+use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DemoInviteController;
 use App\Http\Controllers\DestinationController;
+use App\Http\Controllers\GmailController;
+use App\Http\Controllers\GmailThreadController;
 use App\Http\Controllers\InvitationController;
 use App\Http\Controllers\ItineraryController;
 use App\Http\Controllers\MoolrePaymentController;
 use App\Http\Controllers\PaymentPlanController;
+use App\Http\Controllers\PaystackPaymentController;
 use App\Http\Controllers\SubscriptionTierController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TripController;
@@ -53,9 +57,19 @@ Route::post('/payments/moolre/webhook', [MoolrePaymentController::class, 'webhoo
 // rather than trusted on the URL alone. See WeWirePaymentController docblock.
 Route::post('/payments/wewire/webhook', [WeWirePaymentController::class, 'webhook']);
 
+// ── [Paystack Webhook] ── Public — Paystack has no way to send our bearer token. Verified via
+// the x-paystack-signature HMAC header (see PaystackPaymentController::webhook), which also
+// re-verifies status with Paystack itself before trusting anything in the payload.
+Route::post('/payments/paystack/webhook', [PaystackPaymentController::class, 'webhook']);
+
 // ── [Currency Rates] ── Public — static, non-sensitive conversion table (see
 // App\Services\CurrencyService). No auth needed, and the public traveler view needs it too.
 Route::get('/currency-rates', [CurrencyController::class, 'index']);
+
+// ── [Gmail OAuth Callback] ── Public — Google redirects the user's browser here directly
+// after consent, so there's no Sanctum session on this hop. Not trusted blindly: it only acts
+// on a `state` value GmailController::connect() cached server-side (see class docblock).
+Route::get('/gmail/callback', [GmailController::class, 'callback']);
 
 // ── [Public Traveler Routes] ── Reachable via the shareable /travel/{tripId} link — no
 // Meridian account required. trip_id itself (an unguessable generated ID, never sequential)
@@ -105,6 +119,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/{trip}', [TripController::class, 'destroy']);
         Route::post('/{trip}/customers', [TripController::class, 'addCustomer']);
         Route::delete('/{trip}/customers/{customer}', [TripController::class, 'removeCustomer']);
+        Route::post('/{trip}/calls/schedule', [CallController::class, 'scheduleWithMeet']);
     });
 
     // ── [Itinerary Routes] ──
@@ -148,6 +163,35 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{call}/action-items', [CallController::class, 'addActionItem']);
         Route::put('/action-items/{callActionItem}', [CallController::class, 'updateActionItem']);
         Route::delete('/action-items/{callActionItem}', [CallController::class, 'removeActionItem']);
+    });
+
+    // ── [Gmail Routes] ── Connect/status/disconnect for Settings > Channels. The public
+    // OAuth callback counterpart is registered above, outside this auth:sanctum group.
+    Route::prefix('gmail')->group(function () {
+        Route::get('/connect', [GmailController::class, 'connect']);
+        Route::get('/status', [GmailController::class, 'status']);
+        Route::post('/disconnect', [GmailController::class, 'disconnect']);
+        Route::patch('/meet-tracking', [GmailController::class, 'updateMeetTracking']);
+    });
+
+    // ── [Conversation Routes] ── Synced inbox (currently Gmail-only) + the "link this
+    // conversation to a trip" triage action used by the Messages page, plus sending real
+    // replies and asking meridian-ai for draft suggestions.
+    Route::prefix('conversations')->group(function () {
+        Route::get('/', [ConversationController::class, 'index']);
+        Route::get('/{conversation}', [ConversationController::class, 'show']);
+        Route::patch('/{conversation}', [ConversationController::class, 'update']);
+        Route::delete('/{conversation}', [ConversationController::class, 'destroy']);
+        Route::post('/{conversation}/messages', [ConversationController::class, 'sendMessage']);
+        Route::post('/{conversation}/suggest-reply', [ConversationController::class, 'suggestReply']);
+        Route::post('/{conversation}/request-travel-details', [ConversationController::class, 'requestTravelDetails']);
+    });
+
+    // ── [Gmail Thread Routes] ── Browse a connected mailbox and opt specific threads into
+    // tracking — see GmailThreadController's docblock for why this is opt-in, not automatic.
+    Route::prefix('gmail/threads')->group(function () {
+        Route::get('/browse', [GmailThreadController::class, 'browse']);
+        Route::post('/', [GmailThreadController::class, 'store']);
     });
 
     // ── [Company Routes] ──
@@ -218,4 +262,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/trips/{trip}/payment-plan', [PaymentPlanController::class, 'show']);
     Route::patch('/payment-plans/{plan}/reference', [PaymentPlanController::class, 'updateReference']);
     Route::post('/trips/{trip}/payout', [WeWirePaymentController::class, 'payoutTrip']);
+
+    // ── [Paystack Payment Routes] ── Hosted-checkout tour operator subscription payments (see
+    // PaystackPaymentController docblock). The public webhook counterpart is registered above,
+    // outside this auth:sanctum group.
+    Route::prefix('payments/paystack')->group(function () {
+        Route::post('/subscription', [PaystackPaymentController::class, 'initiateSubscriptionPayment']);
+        Route::get('/{transaction}/status', [PaystackPaymentController::class, 'status']);
+    });
 });

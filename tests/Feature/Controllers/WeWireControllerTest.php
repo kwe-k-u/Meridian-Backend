@@ -368,9 +368,9 @@ test('paying out a trip creates a disbursement for the held balance and clears i
     ])->assertStatus(200);
 
     // Now it should be payable.
-    $this->getJson('/api/wewire/trip-balances')->assertJsonFragment(['trip_id' => $trip->trip_id, 'can_payout' => true]);
+    $this->getJson('/api/wewire/trip-balances')->assertJsonFragment(['trip_id' => $trip->trip_id, 'can_payout' => true, 'beneficiary_id' => $beneficiary->id]);
 
-    $payout = $this->postJson("/api/trips/{$trip->trip_id}/payout");
+    $payout = $this->postJson("/api/trips/{$trip->trip_id}/payout", ['beneficiary_id' => $beneficiary->id]);
     $payout->assertStatus(201)->assertJsonPath('amount', 500);
 
     $this->assertDatabaseHas('wewire_disbursements', [
@@ -411,13 +411,13 @@ test('paying out a trip twice in a row is rejected the second time', function ()
         'id' => 'wewire-tx-balance-3', 'amount' => 150, 'currency' => 'USD', 'reference' => "Ref {$reference}",
     ])->assertStatus(200);
 
-    $this->postJson("/api/trips/{$trip->trip_id}/payout")->assertStatus(201);
+    $this->postJson("/api/trips/{$trip->trip_id}/payout", ['beneficiary_id' => $beneficiary->id])->assertStatus(201);
 
-    $second = $this->postJson("/api/trips/{$trip->trip_id}/payout");
+    $second = $this->postJson("/api/trips/{$trip->trip_id}/payout", ['beneficiary_id' => $beneficiary->id]);
     $second->assertStatus(422)->assertJsonFragment(['message' => 'Nothing is currently held for this trip.']);
 });
 
-test('paying out a trip without a beneficiary configured is rejected', function () {
+test('paying out a trip without a beneficiary_id is rejected as a validation error', function () {
     $user = User::factory()->create();
     $trip = Trip::factory()->create();
     attachOwner($trip, $user);
@@ -433,7 +433,111 @@ test('paying out a trip without a beneficiary configured is rejected', function 
     ])->assertStatus(200);
 
     $res = $this->postJson("/api/trips/{$trip->trip_id}/payout");
-    $res->assertStatus(422)->assertJsonFragment(['message' => "Add a USD beneficiary account in Settings before paying out this trip."]);
+    $res->assertStatus(422)->assertJsonValidationErrors(['beneficiary_id']);
+});
+
+test('paying out a trip to a mismatched-currency beneficiary is rejected', function () {
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $company = $trip->company;
+    $this->actingAs($user, 'sanctum');
+
+    $eurBeneficiary = WeWireBeneficiary::create([
+        'id' => 'WBN_TRIP0005', 'company_id' => $company->company_id, 'currency' => 'EUR',
+        'account_name' => 'Wrong Currency', 'settlement_method' => 'SEPA',
+    ]);
+
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 100, 'currency' => 'USD', 'installments' => [['amount' => 100]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    postSignedWebhook('transaction.pay_in', [
+        'id' => 'wewire-tx-balance-5', 'amount' => 100, 'currency' => 'USD', 'reference' => "Ref {$reference}",
+    ])->assertStatus(200);
+
+    $res = $this->postJson("/api/trips/{$trip->trip_id}/payout", ['beneficiary_id' => $eurBeneficiary->id]);
+    $res->assertStatus(422)->assertJsonFragment(['message' => "That beneficiary is in EUR, but this trip's held balance is in USD."]);
+});
+
+test('paying out a trip to a provider for a specific line item with a chosen amount', function () {
+    Http::fake(fn () => Http::response(['id' => 'wewire-payout-provider-1', 'status' => 'PENDING'], 201));
+
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $company = $trip->company;
+    $this->actingAs($user, 'sanctum');
+
+    WeWireVirtualAccount::create([
+        'id' => 'VAC_TRIP0006', 'company_id' => $company->company_id, 'currency' => 'USD', 'status' => 'active',
+    ]);
+    $provider = WeWireBeneficiary::create([
+        'id' => 'WBN_TRIP0006', 'company_id' => $company->company_id, 'currency' => 'USD',
+        'beneficiary_type' => 'provider', 'label' => 'Emirates Airlines',
+        'account_name' => 'Emirates Airlines Ltd', 'settlement_method' => 'WIRE',
+    ]);
+
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 1000, 'currency' => 'USD', 'installments' => [['amount' => 1000]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    postSignedWebhook('transaction.pay_in', [
+        'id' => 'wewire-tx-balance-6', 'amount' => 1000, 'currency' => 'USD', 'reference' => "Ref {$reference}",
+    ])->assertStatus(200);
+
+    // Pay the airline less than the full held balance — a chosen partial amount.
+    $res = $this->postJson("/api/trips/{$trip->trip_id}/payout", [
+        'beneficiary_id' => $provider->id,
+        'amount' => 400,
+        'line_item_type' => 'flight',
+        'line_item_id' => 'FLT_ABC123',
+        'line_item_label' => 'Emirates EK783',
+    ]);
+
+    $res->assertStatus(201)->assertJsonPath('amount', 400);
+    $this->assertDatabaseHas('wewire_disbursements', [
+        'source_trip_id' => $trip->trip_id,
+        'beneficiary_id' => $provider->id,
+        'line_item_type' => 'flight',
+        'line_item_id' => 'FLT_ABC123',
+        'line_item_label' => 'Emirates EK783',
+        'amount' => 400,
+    ]);
+
+    // 600 of the original 1000 should still be held (available for other providers/the agency).
+    $balances = $this->getJson('/api/wewire/trip-balances');
+    $balances->assertJsonFragment(['trip_id' => $trip->trip_id, 'held_balance' => 600]);
+});
+
+test('paying out a trip for an amount exceeding the held balance is rejected', function () {
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $company = $trip->company;
+    $this->actingAs($user, 'sanctum');
+
+    $beneficiary = WeWireBeneficiary::create([
+        'id' => 'WBN_TRIP0007', 'company_id' => $company->company_id, 'currency' => 'USD',
+        'account_name' => 'Agency Payout', 'settlement_method' => 'WIRE',
+    ]);
+    WeWireVirtualAccount::create([
+        'id' => 'VAC_TRIP0007', 'company_id' => $company->company_id, 'currency' => 'USD', 'status' => 'active',
+    ]);
+
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 100, 'currency' => 'USD', 'installments' => [['amount' => 100]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    postSignedWebhook('transaction.pay_in', [
+        'id' => 'wewire-tx-balance-7', 'amount' => 100, 'currency' => 'USD', 'reference' => "Ref {$reference}",
+    ])->assertStatus(200);
+
+    $res = $this->postJson("/api/trips/{$trip->trip_id}/payout", ['beneficiary_id' => $beneficiary->id, 'amount' => 150]);
+    $res->assertStatus(422)->assertJsonFragment(['message' => 'Only 100 USD is currently held for this trip.']);
 });
 
 test('retrying a successful disbursement is rejected', function () {
@@ -459,4 +563,93 @@ test('retrying a successful disbursement is rejected', function () {
     $res = $this->postJson("/api/wewire/disbursements/{$successful->id}/retry");
 
     $res->assertStatus(422)->assertJsonFragment(['message' => 'Only a failed, reversed, or cancelled disbursement can be retried.']);
+});
+
+test('beneficiary creation is simulated and never hits the real WeWire API', function () {
+    Http::fake(); // no stubbed response registered — if anything is actually requested, ->assertNothingSent() below fails.
+    config(['services.wewire.simulate' => true]);
+
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
+    $this->actingAs($user, 'sanctum');
+
+    $res = $this->postJson('/api/wewire/beneficiaries', [
+        'beneficiary_type' => 'provider',
+        'label' => 'Emirates Airlines',
+        'currency' => 'USD',
+        'account_name' => 'Emirates Airlines Ltd',
+        'country' => 'ARE',
+        'settlement_method' => 'WIRE',
+        'address_line1' => '1 Airport Road',
+        'city' => 'Dubai',
+    ]);
+
+    $res->assertStatus(201)
+        ->assertJsonPath('beneficiary_type', 'provider')
+        ->assertJsonPath('label', 'Emirates Airlines');
+    expect($res->json('wewire_beneficiary_id'))->toStartWith('SIM_BEN_');
+    Http::assertNothingSent();
+});
+
+test('beneficiaries can be filtered by type', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
+    WeWireBeneficiary::create([
+        'id' => 'WBN_FILT0001', 'company_id' => $company->company_id, 'currency' => 'USD',
+        'beneficiary_type' => 'agency', 'account_name' => 'Agency Account', 'settlement_method' => 'WIRE',
+    ]);
+    WeWireBeneficiary::create([
+        'id' => 'WBN_FILT0002', 'company_id' => $company->company_id, 'currency' => 'USD',
+        'beneficiary_type' => 'provider', 'label' => 'Hilton Accra', 'account_name' => 'Hilton Ghana Ltd', 'settlement_method' => 'WIRE',
+    ]);
+
+    $this->actingAs($user, 'sanctum');
+
+    $providers = $this->getJson('/api/wewire/beneficiaries?type=provider');
+    $providers->assertStatus(200)->assertJsonCount(1)->assertJsonFragment(['label' => 'Hilton Accra']);
+
+    $all = $this->getJson('/api/wewire/beneficiaries');
+    $all->assertStatus(200)->assertJsonCount(2);
+});
+
+test('KYC submission is simulated and never hits the real WeWire API', function () {
+    Http::fake();
+    config(['services.wewire.simulate' => true]);
+
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
+    $this->actingAs($user, 'sanctum');
+
+    $sub = $this->postJson('/api/wewire/subcustomer', [
+        'email' => 'ops@example.com', 'country' => 'GHA', 'business_type' => 'GENERAL_BUSINESS',
+    ]);
+    $sub->assertStatus(200);
+    expect($sub->json('wewire_subcustomer_id'))->toStartWith('SIM_SUB_');
+    Http::assertNothingSent();
+});
+
+test('virtual account requests are NOT simulated and still call the real API', function () {
+    Http::fake(fn () => Http::response(['id' => 'wewire-va-real-1', 'status' => 'REQUESTED'], 202));
+    config(['services.wewire.simulate' => true]); // simulate=true should not affect this endpoint
+
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['wewire_subcustomer_id' => 'wewire-sub-real-123']);
+    $company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
+    $this->actingAs($user, 'sanctum');
+
+    $res = $this->postJson('/api/wewire/accounts', ['currency' => 'USD']);
+
+    $res->assertStatus(201)->assertJsonPath('wewire_account_id', 'wewire-va-real-1');
+    Http::assertSent(fn ($request) => str_contains($request->url(), '/accounts/request'));
 });

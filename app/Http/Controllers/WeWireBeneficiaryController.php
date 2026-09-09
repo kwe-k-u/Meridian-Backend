@@ -12,18 +12,25 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
 /**
- * Manages a company's WeWire payout beneficiaries — the bank accounts a virtual account can
- * be set to auto-disburse to (see WeWireAccountController::update).
+ * Manages a company's WeWire payout beneficiaries — bank accounts money can be disbursed to.
+ * Two kinds: the agency's own payout account (beneficiary_type='agency', a virtual account
+ * can be set to auto-disburse to one — see WeWireAccountController::update) or a specific
+ * trip service provider's account (beneficiary_type='provider' — an airline, hotel, or
+ * activity vendor, paid out manually via WeWirePaymentController::payoutTrip).
  *
  * Routes: /api/wewire/beneficiaries (authenticated).
  */
 class WeWireBeneficiaryController extends Controller
 {
-    // GET /api/wewire/beneficiaries
+    // GET /api/wewire/beneficiaries — optionally filtered by ?type=agency|provider.
     public function index(Request $request): JsonResponse
     {
         $company = UserHelper::user_company($request);
-        return response()->json($company->wewireBeneficiaries()->get());
+        $query = $company->wewireBeneficiaries();
+        if ($type = $request->query('type')) {
+            $query->where('beneficiary_type', $type);
+        }
+        return response()->json($query->get());
     }
 
     // POST /api/wewire/beneficiaries
@@ -32,6 +39,8 @@ class WeWireBeneficiaryController extends Controller
         $company = UserHelper::user_company($request);
 
         $validated = $request->validate([
+            'beneficiary_type' => ['sometimes', 'string', Rule::in(['agency', 'provider'])],
+            'label' => 'nullable|string|max:255',
             'currency' => ['required', 'string', Rule::in(\App\Models\WeWireVirtualAccount::SUPPORTED_CURRENCIES)],
             'account_name' => 'required|string|max:255',
             'bank_name' => 'nullable|string|max:255',
@@ -77,6 +86,8 @@ class WeWireBeneficiaryController extends Controller
         $beneficiary = WeWireBeneficiary::create([
             'id' => IdGeneratorService::generateId('WBN'),
             'company_id' => $company->company_id,
+            'beneficiary_type' => $validated['beneficiary_type'] ?? 'agency',
+            'label' => $validated['label'] ?? null,
             'wewire_beneficiary_id' => $result['id'],
             'currency' => $validated['currency'],
             'account_name' => $validated['account_name'],

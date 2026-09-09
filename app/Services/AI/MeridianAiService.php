@@ -42,6 +42,10 @@ class MeridianAiService
         return $this->post('/suggest_response', $payload);
     }
 
+    public function requestTravelDetails(array $payload) : array {
+        return $this->post('/request_travel_details',$payload);
+    }
+
     public function recommendStay(array $payload): array
     {
         return $this->post('/recommend_stay', $payload);
