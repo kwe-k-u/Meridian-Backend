@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * Model for the `trips` table.
@@ -86,5 +87,12 @@ class Trip extends Model
     public function tripPayments(): HasMany
     {
         return $this->hasMany(TripPayment::class, 'trip_id', 'trip_id');
+    }
+
+    // This trip's WeWire installment plan, if the agency has set one up — see
+    // PaymentPlanController and the public /pay/:reference collection page.
+    public function paymentPlan(): HasOne
+    {
+        return $this->hasOne(PaymentPlan::class, 'trip_id', 'trip_id');
     }
 }

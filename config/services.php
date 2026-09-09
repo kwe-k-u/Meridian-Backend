@@ -35,6 +35,14 @@ return [
         ],
     ],
 
+    // The seeded shared demo account (see database/seeders/DemoDataSeeder.php) that
+    // demo invitees get a seat on. Looked up by email at runtime rather than a fixed ID,
+    // since IdGeneratorService::generateId() assigns the company_id randomly at seed time.
+    'demo' => [
+        'account_email' => env('DEMO_ACCOUNT_EMAIL', 'demo@meridian.com'),
+        'invite_expiry_days' => env('DEMO_INVITE_EXPIRY_DAYS', 30),
+    ],
+
     // Moolre (https://docs.moolre.com/) — mobile-money hosted-checkout payments.
     // Sandbox only requires api_user; live also needs api_key (payment init) and
     // api_pubkey (status checks). See App\Services\MoolreService.
@@ -45,6 +53,17 @@ return [
         'api_pubkey' => env('MOOLRE_PUBLIC_KEY'),
         'account_number' => env('MOOLRE_ACCOUNT_NUMBER'),
         'callback_url' => env('MOOLRE_CALLBACK_URL'),
+        'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+    ],
+
+    // WeWire (https://docs.wewire.com/) — multi-currency virtual accounts, payouts/disbursement,
+    // and business KYC. Unlike Moolre there's no hosted checkout link product — customer
+    // collection happens via bank transfer/mobile money into a virtual account, reconciled by
+    // reference code (see App\Services\WeWireService, App\Http\Controllers\WeWirePaymentController).
+    'wewire' => [
+        'base_url' => env('WEWIRE_BASE_URL', 'https://stage-capi.wewireafrica.com'),
+        'api_key' => env('WEWIRE_API_KEY'),
+        'webhook_secret' => env('WEWIRE_WEBHOOK_SECRET'),
         'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
     ],
 

@@ -8,15 +8,21 @@ use App\Http\Controllers\CompanySubscriptionController;
 use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\CustomerController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DemoInviteController;
 use App\Http\Controllers\DestinationController;
 use App\Http\Controllers\InvitationController;
 use App\Http\Controllers\ItineraryController;
 use App\Http\Controllers\MoolrePaymentController;
+use App\Http\Controllers\PaymentPlanController;
 use App\Http\Controllers\SubscriptionTierController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\TripController;
 use App\Http\Controllers\EmailController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\WeWireAccountController;
+use App\Http\Controllers\WeWireBeneficiaryController;
+use App\Http\Controllers\WeWireOnboardingController;
+use App\Http\Controllers\WeWirePaymentController;
 use Illuminate\Support\Facades\Route;
 
 // All routes below are prefixed with /api automatically (see bootstrap/app.php).
@@ -43,6 +49,10 @@ Route::prefix('auth')->group(function() {
 // blindly: MoolrePaymentController::webhook() re-verifies status with Moolre itself.
 Route::post('/payments/moolre/webhook', [MoolrePaymentController::class, 'webhook']);
 
+// ── [WeWire Webhook] ── Public — signature-verified (see WeWireService::verifyWebhookSignature)
+// rather than trusted on the URL alone. See WeWirePaymentController docblock.
+Route::post('/payments/wewire/webhook', [WeWirePaymentController::class, 'webhook']);
+
 // ── [Currency Rates] ── Public — static, non-sensitive conversion table (see
 // App\Services\CurrencyService). No auth needed, and the public traveler view needs it too.
 Route::get('/currency-rates', [CurrencyController::class, 'index']);
@@ -58,6 +68,15 @@ Route::prefix('public')->group(function () {
     Route::post('/trips/{trip}/itineraries/{itinerary}/accept', [TripController::class, 'acceptItinerary']);
     Route::post('/payments/moolre/trip', [MoolrePaymentController::class, 'initiatePublicTripPayment']);
     Route::get('/payments/moolre/{transaction}/status', [MoolrePaymentController::class, 'publicStatus']);
+
+    // ── [WeWire Public Collection Page] ── Reachable via the shareable /pay/{reference} link
+    // — no Meridian account required. See WeWirePaymentController::lookupPublic.
+    Route::get('/payments/wewire/lookup/{reference}', [WeWirePaymentController::class, 'lookupPublic']);
+
+    // ── [Demo Invite Routes] ── Landing-page validation + acceptance for a demo-invite link
+    // emailed by DemoInviteController::store() (registered below, behind auth:sanctum).
+    Route::get('/demo-invites/{token}', [DemoInviteController::class, 'show']);
+    Route::post('/demo-invites/{token}', [DemoInviteController::class, 'accept']);
 });
 
 // ── [Authenticated Routes] ──
@@ -144,6 +163,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // ── [Invitation Routes] ──
     Route::post('/invitations', [InvitationController::class, 'store']);
 
+    // ── [Demo Invite Routes] ── Any authenticated user can invite someone to a seat on the
+    // shared demo account (see DemoInviteController docblock) — accept/show above are public.
+    Route::post('/demo-invites', [DemoInviteController::class, 'store']);
+
     // ── [Profile Routes] ──
     Route::get('/auth/me', [AuthController::class, 'me']);
     Route::put('/auth/profile', [AuthController::class, 'updateProfile']);
@@ -171,4 +194,28 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/subscription', [MoolrePaymentController::class, 'initiateSubscriptionPayment']);
         Route::get('/{transaction}/status', [MoolrePaymentController::class, 'status']);
     });
+
+    // ── [WeWire Routes] ── Business onboarding (sub-customer + KYC), up-to-3 multi-currency
+    // virtual accounts, beneficiaries, the reconciliation queue, and per-trip payment plans.
+    // See WeWireOnboardingController/WeWireAccountController/WeWireBeneficiaryController/
+    // PaymentPlanController/WeWirePaymentController docblocks. The public collection page and
+    // webhook counterparts are registered above, outside this auth:sanctum group.
+    Route::prefix('wewire')->group(function () {
+        Route::post('/subcustomer', [WeWireOnboardingController::class, 'registerSubCustomer']);
+        Route::post('/subcustomer/kyc', [WeWireOnboardingController::class, 'submitKyc']);
+        Route::get('/subcustomer', [WeWireOnboardingController::class, 'status']);
+        Route::apiResource('accounts', WeWireAccountController::class)->only(['index', 'store', 'update']);
+        Route::apiResource('beneficiaries', WeWireBeneficiaryController::class)->only(['index', 'store']);
+        Route::get('/inbound', [WeWirePaymentController::class, 'listInbound']);
+        Route::post('/inbound/{inbound}/match', [WeWirePaymentController::class, 'matchInbound']);
+        Route::get('/disbursements', [WeWirePaymentController::class, 'listDisbursements']);
+        Route::post('/disbursements/{disbursement}/retry', [WeWirePaymentController::class, 'retryDisbursement']);
+        // ── [Agency Payouts] ── Dashboard "pay out agency for this trip" panel — see
+        // WeWirePaymentController::tripBalances/payoutTrip.
+        Route::get('/trip-balances', [WeWirePaymentController::class, 'tripBalances']);
+    });
+    Route::post('/trips/{trip}/payment-plan', [PaymentPlanController::class, 'store']);
+    Route::get('/trips/{trip}/payment-plan', [PaymentPlanController::class, 'show']);
+    Route::patch('/payment-plans/{plan}/reference', [PaymentPlanController::class, 'updateReference']);
+    Route::post('/trips/{trip}/payout', [WeWirePaymentController::class, 'payoutTrip']);
 });

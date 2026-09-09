@@ -67,4 +67,9 @@ class Transaction extends Model
     {
         return $this->hasOne(TripPayment::class, 'transaction_id', 'transaction_id');
     }
+
+    public function installmentPayment(): HasOne
+    {
+        return $this->hasOne(InstallmentPayment::class, 'transaction_id', 'transaction_id');
+    }
 }

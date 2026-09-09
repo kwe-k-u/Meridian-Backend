@@ -30,6 +30,8 @@ class Company extends Model
         'city_of_operation',
         'status',
         'preferred_currency',
+        'wewire_subcustomer_id',
+        'wewire_kyc_status',
     ];
 
     // The team members (users) that belong to this company, e.g. for the Settings > Team page.
@@ -43,5 +45,17 @@ class Company extends Model
     public function trips(): HasMany
     {
         return $this->hasMany(Trip::class, 'company_id', 'company_id');
+    }
+
+    // This company's WeWire multi-currency collection accounts (up to 3, one per currency).
+    public function wewireAccounts(): HasMany
+    {
+        return $this->hasMany(WeWireVirtualAccount::class, 'company_id', 'company_id');
+    }
+
+    // Bank accounts this company can disburse WeWire funds to.
+    public function wewireBeneficiaries(): HasMany
+    {
+        return $this->hasMany(WeWireBeneficiary::class, 'company_id', 'company_id');
     }
 }
