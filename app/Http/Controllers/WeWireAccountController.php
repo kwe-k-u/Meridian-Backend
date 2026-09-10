@@ -25,6 +25,17 @@ use Illuminate\Validation\Rule;
  */
 class WeWireAccountController extends Controller
 {
+    // WeWire's accepted `sourceOfFunds` values for a USD account request (only required for
+    // USD — see store()). Sending anything outside this list is a 400 VALIDATION_FAILED from
+    // WeWire itself.
+    private const SOURCE_OF_FUNDS_VALUES = [
+        'company_funds', 'ecommerce_reseller', 'gambling_proceeds', 'gifts', 'government_benefits',
+        'inheritance', 'investments_loans', 'pension_retirement', 'salary', 'sale_of_assets_real_estate',
+        'savings', 'someone_elses_funds', 'business_loans', 'grants', 'inter_company_funds',
+        'investment_proceeds', 'legal_settlement', 'owners_capital', 'sale_of_assets',
+        'sales_of_goods_and_services', 'third_party_funds', 'treasury_reserves',
+    ];
+
     // GET /api/wewire/accounts
     public function index(Request $request): JsonResponse
     {
@@ -45,7 +56,7 @@ class WeWireAccountController extends Controller
 
         $validated = $request->validate([
             'currency' => ['required', 'string', Rule::in(WeWireVirtualAccount::SUPPORTED_CURRENCIES)],
-            'source_of_funds' => 'nullable|string|max:100',
+            'source_of_funds' => ['nullable', 'string', Rule::in(self::SOURCE_OF_FUNDS_VALUES)],
             'confirm_simulated' => 'nullable|boolean',
         ]);
 
@@ -58,7 +69,7 @@ class WeWireAccountController extends Controller
             return response()->json(['message' => "You already have a {$validated['currency']} account."], 422);
         }
 
-        $sourceOfFunds = $validated['currency'] === 'USD' ? ($validated['source_of_funds'] ?? 'BUSINESS_OPERATIONS') : null;
+        $sourceOfFunds = $validated['currency'] === 'USD' ? ($validated['source_of_funds'] ?? 'sales_of_goods_and_services') : null;
         $result = $wewire->requestVirtualAccount(
             $company->wewire_subcustomer_id,
             $validated['currency'],
