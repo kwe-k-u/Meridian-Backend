@@ -36,6 +36,7 @@ class WeWireInboundTransaction extends Model
         'reference_raw',
         'matched_payment_reference',
         'status',
+        'is_simulated',
         'installment_id',
         'transaction_id',
         'received_at',
@@ -44,6 +45,7 @@ class WeWireInboundTransaction extends Model
     protected $casts = [
         'amount' => 'float',
         'status' => InboundMatchStatus::class,
+        'is_simulated' => 'boolean',
         'received_at' => 'datetime',
     ];
 

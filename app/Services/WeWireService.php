@@ -111,18 +111,43 @@ class WeWireService
     }
 
     // POST /v1/subcustomers/{id}/accounts/request — requests one currency's virtual account.
-    // sourceOfFunds is only required when currency is USD.
-    public function requestVirtualAccount(string $subCustomerId, string $currency, ?string $sourceOfFunds = null): array
+    // sourceOfFunds is only required when currency is USD. $confirmSimulated skips the live
+    // call entirely and returns a fabricated success — see liveCall()'s docblock for the
+    // two-phase confirm flow this supports.
+    public function requestVirtualAccount(string $subCustomerId, string $currency, ?string $sourceOfFunds = null, bool $confirmSimulated = false): array
     {
         $payload = ['currency' => $currency];
         if ($sourceOfFunds) {
             $payload['sourceOfFunds'] = $sourceOfFunds;
         }
-        return $this->post("/v1/subcustomers/{$subCustomerId}/accounts/request", $payload);
+
+        return $this->liveCall('post', "/v1/subcustomers/{$subCustomerId}/accounts/request", $payload, function () use ($currency) {
+            return [
+                'id' => 'SIM_ACC_' . strtoupper(\Illuminate\Support\Str::random(10)),
+                'currency' => $currency,
+                'status' => 'ACTIVE',
+                'accountNumber' => 'SIM' . random_int(1000000000, 9999999999),
+            ];
+        }, $confirmSimulated, fn (array $data) => isset($data['id']));
     }
 
-    // POST /v1/beneficiaries — registers a payout destination bank account.
-    public function createBeneficiary(array $beneficiaryData): array
+    // GET /v1/subcustomers/{subCustomerId}/accounts/{accountId} — the real-time status of an
+    // already-requested virtual account (https://docs.wewire.com/api-reference/
+    // sub-customer-accounts/get-account). Used to verify an account is genuinely ACTIVE on
+    // WeWire's side right before a customer is told to pay into it — see
+    // WeWirePaymentController::attemptPublicPayment. $confirmSimulated — see
+    // requestVirtualAccount() above.
+    public function getVirtualAccount(string $subCustomerId, string $accountId, bool $confirmSimulated = false): array
+    {
+        return $this->liveCall('get', "/v1/subcustomers/{$subCustomerId}/accounts/{$accountId}", [], function () use ($accountId) {
+            return ['id' => $accountId, 'status' => 'ACTIVE'];
+        }, $confirmSimulated, fn (array $data) => isset($data['status']));
+    }
+
+    // POST /v1/beneficiaries — registers a payout destination bank account. $confirmSimulated —
+    // see requestVirtualAccount() above; only takes effect once WEWIRE_SIMULATE is off (below),
+    // since a call gated by that flag never reaches WeWire in the first place.
+    public function createBeneficiary(array $beneficiaryData, bool $confirmSimulated = false): array
     {
         if ($this->simulate) {
             // SIMULATED — see the constructor comment. Every other beneficiary-adjacent flow
@@ -130,23 +155,42 @@ class WeWireService
             return ['id' => 'SIM_BEN_' . strtoupper(\Illuminate\Support\Str::random(10))];
         }
 
-        return $this->post('/v1/beneficiaries', $beneficiaryData);
+        return $this->liveCall('post', '/v1/beneficiaries', $beneficiaryData, function () {
+            return ['id' => 'SIM_BEN_' . strtoupper(\Illuminate\Support\Str::random(10))];
+        }, $confirmSimulated, fn (array $data) => isset($data['id']));
     }
 
     // POST /v1/transactions/initiate-payout — disburses held funds to a beneficiary account.
     // idempotencyKey is generated here (not left to the caller) so a retried disbursement for
-    // the same inbound payment never double-pays.
-    public function initiatePayout(array $payoutData): array
+    // the same inbound payment never double-pays. $confirmSimulated — see requestVirtualAccount().
+    public function initiatePayout(array $payoutData, bool $confirmSimulated = false): array
     {
-        return $this->post('/v1/transactions/initiate-payout', array_merge([
+        return $this->liveCall('post', '/v1/transactions/initiate-payout', array_merge([
             'idempotencyKey' => (string) \Illuminate\Support\Str::uuid(),
-        ], $payoutData));
+        ], $payoutData), function () use ($payoutData) {
+            return [
+                'id' => 'SIM_TXN_' . strtoupper(\Illuminate\Support\Str::random(10)),
+                'status' => 'SUCCESSFUL',
+                'amount' => $payoutData['amount'] ?? null,
+                'fee' => 0,
+            ];
+        }, $confirmSimulated, fn (array $data) => isset($data['id']));
     }
 
     // GET /v1/transactions/{id}
     public function getTransaction(string $transactionId): array
     {
         return $this->get("/v1/transactions/{$transactionId}");
+    }
+
+    // GET /v1/rates/pair — near real-time bid/ask exchange rate between two currencies (see
+    // https://docs.wewire.com/api-reference/rates/get-pair-rate). Used by CurrencyController to
+    // replace the hardcoded CurrencyService table with live rates. Not wrapped in liveCall()
+    // since this isn't a money-moving call — a failure here should just fall back to the
+    // hardcoded table, which the controller handles itself.
+    public function getPairRate(string $from, string $to): array
+    {
+        return $this->get('/v1/rates/pair?' . http_build_query(['from' => $from, 'to' => $to]));
     }
 
     /**
@@ -198,6 +242,70 @@ class WeWireService
     {
         $response = Http::withHeaders($this->headers())->post("{$this->baseUrl}{$path}", $payload);
         return $response->json() ?? [];
+    }
+
+    /**
+     * Two-phase fallback wrapper for WeWire calls that are on the live money-moving path
+     * (currently requestVirtualAccount/initiatePayout — see their callers in
+     * WeWireAccountController/WeWirePaymentController): WeWire's staging API is flaky enough
+     * that a failed call shouldn't just dead-end the dashboard.
+     *
+     * Phase 1 ($confirmSimulated = false, the normal case): call WeWire for real. On success,
+     * return its body as-is (merged with `_wewire_meta.source = 'live'`). On failure (non-2xx,
+     * a thrown connection exception, OR a 2xx response that $isUsable rejects — e.g. WeWire
+     * accepting the HTTP request but replying with something like "business KYC still in
+     * review" instead of an actual account id), DO NOT fabricate anything silently — return
+     * `_wewire_meta.source = 'simulated_fallback'` plus the real error AND a proposed simulated
+     * body, so the controller can hand both to the frontend without persisting/committing
+     * anything yet. The frontend shows the "Response from wewire server" popup and asks the
+     * user whether to proceed with the simulated result.
+     *
+     * Phase 2 ($confirmSimulated = true): the frontend resubmits the same request after the
+     * user accepted the popup. Skips the live call entirely and returns the simulator's output
+     * tagged `_wewire_meta.source = 'simulated_confirmed'`, which the controller then persists
+     * exactly like a real success (just flagged `is_simulated` for the audit trail).
+     *
+     * $isUsable optionally inspects a *successful* HTTP response's decoded body and returns
+     * false to still route it into the fallback path (default: any 2xx counts as usable).
+     */
+    private function liveCall(string $method, string $path, array $payload, \Closure $simulate, bool $confirmSimulated = false, ?\Closure $isUsable = null): array
+    {
+        if ($confirmSimulated) {
+            return array_merge($simulate(), ['_wewire_meta' => ['source' => 'simulated_confirmed']]);
+        }
+
+        try {
+            $response = $method === 'get'
+                ? Http::withHeaders($this->headers())->get("{$this->baseUrl}{$path}")
+                : Http::withHeaders($this->headers())->post("{$this->baseUrl}{$path}", $payload);
+        } catch (\Throwable $e) {
+            return array_merge($simulate(), [
+                '_wewire_meta' => ['source' => 'simulated_fallback', 'error' => ['status' => null, 'body' => $e->getMessage()]],
+            ]);
+        }
+
+        if ($response->successful()) {
+            $data = $response->json();
+            $data = is_array($data) ? $data : [];
+
+            if (!$isUsable || $isUsable($data)) {
+                return array_merge($data, ['_wewire_meta' => ['source' => 'live']]);
+            }
+
+            // WeWire accepted the HTTP request but didn't give back anything we can actually
+            // use (e.g. blocked pending business/KYC review) — same fallback UX as an outright
+            // failure, since from the dashboard's point of view it's equally a dead end.
+            return array_merge($simulate(), [
+                '_wewire_meta' => ['source' => 'simulated_fallback', 'error' => ['status' => $response->status(), 'body' => $data]],
+            ]);
+        }
+
+        return array_merge($simulate(), [
+            '_wewire_meta' => [
+                'source' => 'simulated_fallback',
+                'error' => ['status' => $response->status(), 'body' => $response->json() ?? $response->body()],
+            ],
+        ]);
     }
 
     private function headers(): array

@@ -46,11 +46,13 @@ class WeWireVirtualAccount extends Model
         'routing_number',
         'fund_handling',
         'beneficiary_account_id',
+        'is_simulated',
     ];
 
     protected $casts = [
         'status' => VirtualAccountStatus::class,
         'fund_handling' => FundHandling::class,
+        'is_simulated' => 'boolean',
     ];
 
     public function company(): BelongsTo

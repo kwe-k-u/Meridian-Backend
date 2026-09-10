@@ -46,6 +46,14 @@ class MeridianAiService
         return $this->post('/request_travel_details',$payload);
     }
 
+    // "Create trip from this chat" — extracts a structured trip request (destinations, dates,
+    // budget, etc.) already present in a conversation, for ConversationController::extractTripDetails
+    // to hand the frontend as a prefilled (not blank) trip-creation form.
+    public function extractTripDetails(array $payload): array
+    {
+        return $this->post('/extract_trip_details', $payload);
+    }
+
     public function recommendStay(array $payload): array
     {
         return $this->post('/recommend_stay', $payload);

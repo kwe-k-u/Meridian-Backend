@@ -89,10 +89,23 @@ class Trip extends Model
         return $this->hasMany(TripPayment::class, 'trip_id', 'trip_id');
     }
 
-    // This trip's WeWire installment plan, if the agency has set one up — see
-    // PaymentPlanController and the public /pay/:reference collection page.
+    // Every WeWire payment plan set up for this trip — up to one per PaymentPlanType (see
+    // unique(trip_id, plan_type)): the FULL + INSTALLMENTS pair auto-created on itinerary
+    // acceptance (App\Services\DefaultPaymentPlanService), plus an optional hand-built CUSTOM
+    // one. Use this (not paymentPlan() below) for anything that needs to account for money
+    // collected through *any* of a trip's plans — see WeWirePaymentController::
+    // heldBalanceForTrip/tripBalances.
+    public function paymentPlans(): HasMany
+    {
+        return $this->hasMany(PaymentPlan::class, 'trip_id', 'trip_id');
+    }
+
+    // The staff hand-built plan specifically (PaymentPlanType::CUSTOM), if the agency has set
+    // one up via PaymentPlanController::store — distinct from the FULL/INSTALLMENTS defaults,
+    // which live under paymentPlans() above since a trip can have both at once.
     public function paymentPlan(): HasOne
     {
-        return $this->hasOne(PaymentPlan::class, 'trip_id', 'trip_id');
+        return $this->hasOne(PaymentPlan::class, 'trip_id', 'trip_id')
+            ->where('plan_type', \App\Enums\PaymentPlanType::CUSTOM->value);
     }
 }

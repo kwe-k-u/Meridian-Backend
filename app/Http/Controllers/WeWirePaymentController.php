@@ -26,6 +26,7 @@ use App\Services\WeWireService;
 use Exception;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -67,6 +68,13 @@ class WeWirePaymentController extends Controller
             return response()->json(['message' => 'We couldn\'t find a payment matching that reference. Double-check the code and try again.'], 404);
         }
 
+        return response()->json($this->buildLookupResponse($plan));
+    }
+
+    // Shared by lookupPublic() and simulatePublicPayment() so the "pay now" page and the demo
+    // "simulate payment" action return an identically-shaped payload.
+    private function buildLookupResponse(PaymentPlan $plan): array
+    {
         $account = WeWireVirtualAccount::where('company_id', $plan->trip->company_id)
             ->where('currency', $plan->currency)
             ->where('status', VirtualAccountStatus::ACTIVE->value)
@@ -85,7 +93,7 @@ class WeWirePaymentController extends Controller
             ];
         });
 
-        return response()->json([
+        return [
             'payment_reference' => $plan->payment_reference,
             'trip_name' => $plan->trip->trip_name,
             'company_name' => $plan->trip->company->company_name,
@@ -101,7 +109,113 @@ class WeWirePaymentController extends Controller
                 'sort_code' => $account->sort_code,
                 'routing_number' => $account->routing_number,
             ] : null,
-        ]);
+        ];
+    }
+
+    // POST /api/public/payments/wewire/simulate/{reference} — public, the "Proceed with
+    // payment" button on the /pay/{reference} page. Two-phase, same pattern as
+    // WeWireAccountController::store / WeWirePaymentController::initiateDisbursement:
+    //
+    // Phase 1 ($confirmSimulated = false, the normal case): actually asks WeWire whether the
+    // receiving virtual account is genuinely ACTIVE right now (WeWireService::
+    // getVirtualAccount) — there's no WeWire API to "make" a bank-transfer payment happen (see
+    // class docblock), so this live check is the real thing being attempted here. If it comes
+    // back verified, nothing is simulated: the response just confirms the account is ready and
+    // the customer should go ahead and transfer for real (the webhook will confirm it later).
+    // If the live check fails or the account isn't really active (e.g. one that only exists
+    // because WeWireAccountController::store's own fallback was used to force it through), this
+    // returns 409 with the "Response from wewire server" popup payload instead of pretending to
+    // pay.
+    //
+    // Phase 2 ($confirmSimulated = true): the customer accepted that popup. Settles every
+    // outstanding installment in full, one simulated inbound transaction at a time (flagged
+    // is_simulated), through the same reconcile() path a real webhook uses — so it sends the
+    // same confirmation email and triggers the same auto-disbursement. Gated behind
+    // WEWIRE_SIMULATE so a real production customer can never fabricate their own payment.
+    public function simulatePublicPayment(Request $request, string $reference): JsonResponse
+    {
+        $plan = PaymentPlan::with(['installments', 'trip.company'])
+            ->where('payment_reference', strtoupper($reference))
+            ->first();
+
+        if (!$plan) {
+            return response()->json(['message' => 'We couldn\'t find a payment matching that reference. Double-check the code and try again.'], 404);
+        }
+
+        $account = WeWireVirtualAccount::where('company_id', $plan->trip->company_id)
+            ->where('currency', $plan->currency)
+            ->where('status', VirtualAccountStatus::ACTIVE->value)
+            ->first();
+
+        if (!$account) {
+            return response()->json(['message' => "Your agency hasn't finished setting up payments in {$plan->currency} yet."], 422);
+        }
+
+        $confirmSimulated = $request->boolean('confirm_simulated');
+
+        if (!$confirmSimulated) {
+            $company = $plan->trip->company;
+
+            if (!$company->wewire_subcustomer_id || !$account->wewire_account_id) {
+                $liveMeta = ['source' => 'simulated_fallback', 'error' => ['status' => null, 'body' => 'No WeWire account reference on file for this company.']];
+            } else {
+                $wewire = app(WeWireService::class);
+                $result = $wewire->getVirtualAccount($company->wewire_subcustomer_id, $account->wewire_account_id);
+                $liveMeta = $result['_wewire_meta'] ?? ['source' => 'live'];
+                $liveMeta['status'] = strtoupper($result['status'] ?? '');
+            }
+
+            if (($liveMeta['source'] ?? null) === 'live' && ($liveMeta['status'] ?? null) === strtoupper(VirtualAccountStatus::ACTIVE->value)) {
+                // Genuinely verified with WeWire — nothing to simulate, tell the customer to
+                // go ahead and make the real transfer.
+                return response()->json(array_merge($this->buildLookupResponse($plan), ['verified' => true]));
+            }
+
+            Log::warning('WeWire virtual account failed live verification on the public pay page', [
+                'payment_reference' => $plan->payment_reference,
+                'account_id' => $account->id,
+                'meta' => $liveMeta,
+            ]);
+
+            return response()->json([
+                'requires_confirmation' => true,
+                'title' => 'Response from wewire server',
+                'message' => ($liveMeta['source'] ?? null) === 'live'
+                    ? "WeWire reports this account isn't active yet (status: {$liveMeta['status']}). You can proceed with a simulated payment instead."
+                    : 'WeWire did not confirm this account is ready to receive payment. You can proceed with a simulated payment instead.',
+                'error' => $liveMeta['error'] ?? ['status' => 200, 'body' => ['status' => $liveMeta['status'] ?? null]],
+            ], 409);
+        }
+
+        if (!config('services.wewire.simulate')) {
+            return response()->json(['message' => 'Simulated payments are only available while WeWire is in simulation mode.'], 403);
+        }
+
+        $outstanding = $plan->installments->first(fn(Installment $i) => $i->paidAmount() < $i->amount);
+        while ($outstanding) {
+            $amount = round($outstanding->amount - $outstanding->paidAmount(), 2);
+
+            $inbound = WeWireInboundTransaction::create([
+                'id' => IdGeneratorService::generateId('WIT'),
+                'wewire_transaction_id' => IdGeneratorService::generateId('SIM'),
+                'virtual_account_id' => $account->id,
+                'amount' => $amount,
+                'currency' => $plan->currency,
+                'reference_raw' => $plan->payment_reference,
+                'matched_payment_reference' => $plan->payment_reference,
+                'status' => InboundMatchStatus::UNMATCHED->value,
+                'is_simulated' => true,
+                'received_at' => now(),
+            ]);
+
+            $this->reconcile($inbound, $outstanding);
+
+            $plan->refresh();
+            $plan->load('installments');
+            $outstanding = $plan->installments->first(fn(Installment $i) => $i->paidAmount() < $i->amount);
+        }
+
+        return response()->json($this->buildLookupResponse($plan->fresh(['installments', 'trip.company'])));
     }
 
     // POST /api/payments/wewire/webhook — Public. WeWire has no way to send our bearer token,
@@ -296,59 +410,93 @@ class WeWirePaymentController extends Controller
         $this->initiateDisbursement($account, $account->beneficiary, (float) $inbound->amount, $inbound->currency, ['source_inbound_id' => $inbound->id]);
     }
 
-    // Creates the WeWireDisbursement audit row *before* calling WeWire (so a crash mid-call
-    // still leaves a PENDING row rather than nothing), then calls initiatePayout(). If WeWire
-    // never even accepts the request (no `id` in the response), the row is marked
-    // INITIATION_FAILED immediately — there's no wewire_transaction_id for a later webhook to
-    // ever update, so this is the only chance to record the failure reason.
+    // Calls WeWire's initiate-payout, then creates the WeWireDisbursement audit row once the
+    // outcome is known. If WeWire never even accepts the request (no `id` in the response,
+    // including the fallback-declined case), the row is marked INITIATION_FAILED immediately —
+    // there's no wewire_transaction_id for a later webhook to ever update, so this is the only
+    // chance to record the failure reason.
     //
     // $source is either ['source_inbound_id' => ...] (automatic, one inbound payment) or
     // ['source_trip_id' => ...] (manual, sweeps up everything collected on a trip — see
-    // payoutTrip()). Exactly one key is expected; the other column stays null.
-    private function initiateDisbursement(WeWireVirtualAccount $account, WeWireBeneficiary $beneficiary, float $amount, string $currency, array $source): WeWireDisbursement
+    // payoutTrip()). Exactly one key is expected; the other column stays null. Set
+    // $source['interactive'] = true for HTTP-triggered calls (payoutTrip/retryDisbursement) —
+    // when WeWire's live call fails, those get a chance to show the "Response from wewire
+    // server" popup and resubmit with $confirmSimulated before anything is persisted.
+    // maybeDisburse() (webhook-triggered, no user to ask) omits it and just falls through to
+    // recording an INITIATION_FAILED row, same as before this fallback existed.
+    //
+    // Returns ['disbursement' => WeWireDisbursement, 'confirmation' => null] once resolved, or
+    // ['disbursement' => null, 'confirmation' => array] when an interactive caller needs to
+    // show the popup instead.
+    private function initiateDisbursement(WeWireVirtualAccount $account, WeWireBeneficiary $beneficiary, float $amount, string $currency, array $source, bool $confirmSimulated = false): array
     {
+        $interactive = (bool) ($source['interactive'] ?? false);
+        unset($source['interactive']);
+
+        $disbursementId = IdGeneratorService::generateId('WWD');
+
+        // WeWire's real validator rejects underscores in `reference` (IdGeneratorService's
+        // ids are PREFIX_HEXRANDOM) and requires `description` — both confirmed against a real
+        // 400 from /v1/transactions/initiate-payout, not just the docs.
+        $description = isset($source['line_item_label'])
+            ? "Meridian payout — {$source['line_item_label']}"
+            : 'Meridian trip payout';
+
+        $wewire = app(WeWireService::class);
+        $result = $wewire->initiatePayout([
+            'from' => $currency,
+            'to' => $beneficiary->currency,
+            'amount' => $amount,
+            'beneficiaryAccountId' => $beneficiary->wewire_beneficiary_id,
+            'reference' => str_replace('_', '-', $disbursementId),
+            'description' => $description,
+        ], $confirmSimulated);
+
+        $wewireSource = $result['_wewire_meta']['source'] ?? 'live';
+
+        if ($wewireSource === 'simulated_fallback' && $interactive) {
+            Log::warning('WeWire disbursement initiation failed — offering simulated fallback', [
+                'virtual_account_id' => $account->id,
+                'beneficiary_id' => $beneficiary->id,
+                'error' => $result['_wewire_meta']['error'],
+            ]);
+
+            return ['disbursement' => null, 'confirmation' => [
+                'requires_confirmation' => true,
+                'title' => 'Response from wewire server',
+                'message' => 'WeWire did not accept this payout. You can proceed with a simulated result instead.',
+                'error' => $result['_wewire_meta']['error'],
+                'simulated' => Arr::except($result, ['_wewire_meta']),
+            ]];
+        }
+
         $disbursement = WeWireDisbursement::create(array_merge([
-            'id' => IdGeneratorService::generateId('WWD'),
+            'id' => $disbursementId,
             'virtual_account_id' => $account->id,
             'beneficiary_id' => $beneficiary->id,
             'amount' => $amount,
             'currency' => $currency,
             'status' => DisbursementStatus::PENDING->value,
+            'is_simulated' => $wewireSource === 'simulated_confirmed',
             'initiated_at' => now(),
         ], $source));
 
-        try {
-            $wewire = app(WeWireService::class);
-            $result = $wewire->initiatePayout([
-                'from' => $currency,
-                'to' => $beneficiary->currency,
-                'amount' => $amount,
-                'beneficiaryAccountId' => $beneficiary->wewire_beneficiary_id,
-                'reference' => $disbursement->id,
+        if (isset($result['id']) && in_array($wewireSource, ['live', 'simulated_confirmed'], true)) {
+            $disbursement->update([
+                'wewire_transaction_id' => $result['id'],
+                'status' => isset($result['status']) ? strtolower($result['status']) : DisbursementStatus::PENDING->value,
+                'fee' => $result['fee'] ?? null,
             ]);
-
-            if (isset($result['id'])) {
-                $disbursement->update([
-                    'wewire_transaction_id' => $result['id'],
-                    'status' => isset($result['status']) ? strtolower($result['status']) : DisbursementStatus::PENDING->value,
-                    'fee' => $result['fee'] ?? null,
-                ]);
-            } else {
-                Log::warning('WeWire disbursement initiation rejected', ['disbursement_id' => $disbursement->id, 'response' => $result]);
-                $disbursement->update([
-                    'status' => DisbursementStatus::INITIATION_FAILED->value,
-                    'failure_reason' => $result['message'] ?? 'WeWire did not accept the payout request.',
-                ]);
-            }
-        } catch (Exception $e) {
-            Log::error('WeWire disbursement initiation threw', ['disbursement_id' => $disbursement->id, 'error' => $e->getMessage()]);
+        } else {
+            Log::warning('WeWire disbursement initiation rejected', ['disbursement_id' => $disbursement->id, 'response' => $result]);
+            $errorBody = $result['_wewire_meta']['error']['body'] ?? null;
             $disbursement->update([
                 'status' => DisbursementStatus::INITIATION_FAILED->value,
-                'failure_reason' => $e->getMessage(),
+                'failure_reason' => is_array($errorBody) ? json_encode($errorBody) : ($errorBody ?? ($result['message'] ?? 'WeWire did not accept the payout request.')),
             ]);
         }
 
-        return $disbursement->fresh();
+        return ['disbursement' => $disbursement->fresh(), 'confirmation' => null];
     }
 
     // Applies a `transaction.status_updated` webhook. WeWire fires this for both payouts and
@@ -533,17 +681,25 @@ class WeWirePaymentController extends Controller
             return response()->json(['message' => 'Only a failed, reversed, or cancelled disbursement can be retried.'], 422);
         }
 
-        $retry = $this->initiateDisbursement(
+        $result = $this->initiateDisbursement(
             $disbursement->virtualAccount,
             $disbursement->beneficiary,
             (float) $disbursement->amount,
             $disbursement->currency,
-            $disbursement->source_trip_id
-                ? ['source_trip_id' => $disbursement->source_trip_id]
-                : ['source_inbound_id' => $disbursement->source_inbound_id],
+            array_merge(
+                $disbursement->source_trip_id
+                    ? ['source_trip_id' => $disbursement->source_trip_id]
+                    : ['source_inbound_id' => $disbursement->source_inbound_id],
+                ['interactive' => true],
+            ),
+            (bool) $request->boolean('confirm_simulated'),
         );
 
-        return response()->json($retry, 201);
+        if ($result['confirmation']) {
+            return response()->json($result['confirmation'], 409);
+        }
+
+        return response()->json($result['disbursement'], 201);
     }
 
     // GET /api/wewire/trip-balances — for the dashboard's "Pay out agency" panel: every trip
@@ -555,11 +711,15 @@ class WeWirePaymentController extends Controller
     {
         $company = UserHelper::user_company($request);
 
-        $plans = PaymentPlan::with(['trip', 'installments.installmentPayments.transaction'])
-            ->whereHas('trip', fn($q) => $q->where('company_id', $company->company_id))
+        // Grouped by trip (not by plan) — a trip can have several plans at once (FULL +
+        // INSTALLMENTS defaults, plus an optional CUSTOM one, see Trip::paymentPlans()) and
+        // this panel shows one row per trip, summing whatever came in through any of them.
+        $trips = Trip::with(['paymentPlans.installments.installmentPayments.transaction'])
+            ->where('company_id', $company->company_id)
+            ->whereHas('paymentPlans')
             ->get();
 
-        $disbursedByTrip = WeWireDisbursement::whereIn('source_trip_id', $plans->pluck('trip_id'))
+        $disbursedByTrip = WeWireDisbursement::whereIn('source_trip_id', $trips->pluck('trip_id'))
             ->whereIn('status', [DisbursementStatus::PENDING, DisbursementStatus::SUCCESSFUL])
             ->get()
             ->groupBy('source_trip_id')
@@ -574,22 +734,24 @@ class WeWirePaymentController extends Controller
             ->where('status', VirtualAccountStatus::ACTIVE->value)
             ->pluck('currency')->flip();
 
-        $balances = $plans->map(function (PaymentPlan $plan) use ($disbursedByTrip, $beneficiariesByCurrency, $activeAccountCurrencies) {
-            $collected = $this->collectedViaWeWire($plan);
-            $disbursed = (float) ($disbursedByTrip[$plan->trip_id] ?? 0);
+        $balances = $trips->map(function (Trip $trip) use ($disbursedByTrip, $beneficiariesByCurrency, $activeAccountCurrencies) {
+            // All of a trip's plans share one currency — see heldBalanceForTrip()'s comment.
+            $currency = $trip->paymentPlans->first()->currency;
+            $collected = round($trip->paymentPlans->sum(fn (PaymentPlan $plan) => $this->collectedViaWeWire($plan)), 2);
+            $disbursed = (float) ($disbursedByTrip[$trip->trip_id] ?? 0);
             $held = round($collected - $disbursed, 2);
 
-            $candidates = $beneficiariesByCurrency[$plan->currency] ?? collect();
+            $candidates = $beneficiariesByCurrency[$currency] ?? collect();
             $beneficiary = $candidates->firstWhere('beneficiary_type', 'agency') ?? $candidates->first();
 
             return [
-                'trip_id' => $plan->trip_id,
-                'trip_name' => $plan->trip->trip_name,
-                'currency' => $plan->currency,
+                'trip_id' => $trip->trip_id,
+                'trip_name' => $trip->trip_name,
+                'currency' => $currency,
                 'collected' => $collected,
                 'held_balance' => $held,
                 'beneficiary_id' => $beneficiary?->id,
-                'can_payout' => $held > 0.01 && $beneficiary && isset($activeAccountCurrencies[$plan->currency]),
+                'can_payout' => $held > 0.01 && $beneficiary && isset($activeAccountCurrencies[$currency]),
             ];
         })->filter(fn($b) => $b['held_balance'] > 0.01)->values();
 
@@ -616,13 +778,14 @@ class WeWirePaymentController extends Controller
             'line_item_type' => ['nullable', 'string', Rule::in(['flight', 'accommodation', 'activity'])],
             'line_item_id' => 'nullable|string|max:100',
             'line_item_label' => 'nullable|string|max:200',
+            'confirm_simulated' => 'nullable|boolean',
         ]);
 
         $balance = $this->heldBalanceForTrip($trip);
         if (!$balance) {
             return response()->json(['message' => 'This trip has no payment plan / no WeWire collections yet.'], 422);
         }
-        ['plan' => $plan, 'held' => $held] = $balance;
+        ['currency' => $currency, 'held' => $held] = $balance;
 
         if ($held <= 0.01) {
             return response()->json(['message' => 'Nothing is currently held for this trip.'], 422);
@@ -630,53 +793,65 @@ class WeWirePaymentController extends Controller
 
         $amount = isset($validated['amount']) ? (float) $validated['amount'] : $held;
         if ($amount > $held + 0.01) {
-            return response()->json(['message' => "Only {$held} {$plan->currency} is currently held for this trip."], 422);
+            return response()->json(['message' => "Only {$held} {$currency} is currently held for this trip."], 422);
         }
 
         $beneficiary = WeWireBeneficiary::find($validated['beneficiary_id']);
         if (!$beneficiary || $beneficiary->company_id !== $company->company_id) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
-        if ($beneficiary->currency !== $plan->currency) {
-            return response()->json(['message' => "That beneficiary is in {$beneficiary->currency}, but this trip's held balance is in {$plan->currency}."], 422);
+        if ($beneficiary->currency !== $currency) {
+            return response()->json(['message' => "That beneficiary is in {$beneficiary->currency}, but this trip's held balance is in {$currency}."], 422);
         }
 
         $account = WeWireVirtualAccount::where('company_id', $company->company_id)
-            ->where('currency', $plan->currency)
+            ->where('currency', $currency)
             ->where('status', VirtualAccountStatus::ACTIVE->value)
             ->first();
         if (!$account) {
-            return response()->json(['message' => "No active {$plan->currency} virtual account for this company yet."], 422);
+            return response()->json(['message' => "No active {$currency} virtual account for this company yet."], 422);
         }
 
-        $disbursement = $this->initiateDisbursement($account, $beneficiary, $amount, $plan->currency, array_filter([
-            'source_trip_id' => $trip->trip_id,
-            'line_item_type' => $validated['line_item_type'] ?? null,
-            'line_item_id' => $validated['line_item_id'] ?? null,
-            'line_item_label' => $validated['line_item_label'] ?? null,
-        ], fn($v) => $v !== null));
+        $result = $this->initiateDisbursement($account, $beneficiary, $amount, $currency, array_merge(
+            array_filter([
+                'source_trip_id' => $trip->trip_id,
+                'line_item_type' => $validated['line_item_type'] ?? null,
+                'line_item_id' => $validated['line_item_id'] ?? null,
+                'line_item_label' => $validated['line_item_label'] ?? null,
+            ], fn($v) => $v !== null),
+            ['interactive' => true],
+        ), (bool) ($validated['confirm_simulated'] ?? false));
 
-        return response()->json($disbursement, 201);
+        if ($result['confirmation']) {
+            return response()->json($result['confirmation'], 409);
+        }
+
+        return response()->json($result['disbursement'], 201);
     }
 
     // Shared by tripBalances() (batch, across many trips) and payoutTrip() (single trip): how
     // much of what's been collected via WeWire on this trip hasn't been paid out yet, across
     // *any* beneficiary/line-item — so paying the agency AND several providers off the same
-    // trip can never collectively exceed what was actually collected. Returns null if the
-    // trip has no payment plan (nothing collected yet).
+    // trip can never collectively exceed what was actually collected. A trip can have several
+    // payment plans at once (FULL + INSTALLMENTS defaults, plus an optional CUSTOM one — see
+    // Trip::paymentPlans()); money collected through any of them counts. Returns null if the
+    // trip has no payment plan at all yet (nothing to collect through).
     private function heldBalanceForTrip(Trip $trip): ?array
     {
-        $plan = $trip->paymentPlan()->with('installments.installmentPayments.transaction')->first();
-        if (!$plan) {
+        $plans = $trip->paymentPlans()->with('installments.installmentPayments.transaction')->get();
+        if ($plans->isEmpty()) {
             return null;
         }
 
-        $collected = $this->collectedViaWeWire($plan);
+        // All of a trip's plans are generated from the same itinerary total, so they always
+        // share one currency — safe to read off whichever plan happens to be first.
+        $currency = $plans->first()->currency;
+        $collected = round($plans->sum(fn (PaymentPlan $plan) => $this->collectedViaWeWire($plan)), 2);
         $disbursed = (float) WeWireDisbursement::where('source_trip_id', $trip->trip_id)
             ->whereIn('status', [DisbursementStatus::PENDING, DisbursementStatus::SUCCESSFUL])
             ->sum('amount');
 
-        return ['plan' => $plan, 'collected' => $collected, 'disbursed' => $disbursed, 'held' => round($collected - $disbursed, 2)];
+        return ['currency' => $currency, 'collected' => $collected, 'disbursed' => $disbursed, 'held' => round($collected - $disbursed, 2)];
     }
 
     // Sum of every *completed* WeWire transaction collected against a plan's installments —

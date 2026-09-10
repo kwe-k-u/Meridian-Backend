@@ -27,6 +27,7 @@ use App\Services\AI\MeridianAiService;
 use App\Services\AI\TripContextService;
 use App\Models\Airport;
 use App\Services\BookingComService;
+use App\Services\DefaultPaymentPlanService;
 use App\Services\IdGeneratorService;
 use App\Services\SerpApiService;
 use App\Services\TicketmasterService;
@@ -46,9 +47,33 @@ class TripController extends Controller
     // 'customers' is required here (not just on show()) — the Trips list page's "Traveler"
     // column falls back to the creator's name whenever no customer is attached, so omitting
     // this relation made every trip look like it belonged to whoever created it.
+    //
+    // computed_total/computed_currency are added per trip so the list's "Value" column can show
+    // the itinerary's actual cost (confirmed option if there is one, else the first) instead of
+    // Trip.budget — a free-text estimate typed in at trip creation with no relationship to what
+    // the itinerary actually costs, and always shown as GHS regardless of the itinerary's real
+    // currency (see TripDetail.tsx's hero value, fixed the same way). Itinerary relations are
+    // loaded only to compute these two fields and stripped back out before responding, so this
+    // endpoint doesn't ship full itinerary detail (flights/accommodation/day-by-day) for every
+    // row — show() already returns that for a single trip.
     public function index(): JsonResponse
     {
-        $trips = UserHelper::user_company(request())->trips()->with(['company', 'createdBy', 'customers'])->paginate(15);
+        $trips = UserHelper::user_company(request())->trips()->with([
+            'company', 'createdBy', 'customers',
+            'itineraries.itineraryFlights', 'itineraries.itineraryAccommodation', 'itineraries.itineraryDays.destinations',
+        ])->paginate(15);
+
+        $trips->getCollection()->transform(function (Trip $trip) {
+            $itinerary = $trip->itineraries->firstWhere('status', ItineraryStatus::CONFIRMED) ?? $trip->itineraries->first();
+            $cost = $itinerary ? ItineraryHelper::calculateItineraryCost($itinerary) : null;
+
+            $data = $trip->toArray();
+            $data['computed_total'] = $cost['total'] ?? null;
+            $data['computed_currency'] = $cost['currency'] ?? null;
+            unset($data['itineraries']);
+            return $data;
+        });
+
         return response()->json($trips);
     }
 
@@ -192,12 +217,18 @@ class TripController extends Controller
     // traveler doesn't need and nothing agency-internal.
     public function publicShow(Trip $trip): JsonResponse
     {
+        // 'paymentPlans' added so the traveler-facing pay button (TravelerView.tsx) can find
+        // the FULL/INSTALLMENTS default plans (see DefaultPaymentPlanService) by plan_type and
+        // send the customer to /pay/{reference} for whichever they pick — WeWire has no hosted
+        // checkout, so there's no "amount" to submit here, just a lookup key. Empty until the
+        // agency has an accepted itinerary (that's what creates these) or a hand-built plan.
         return response()->json($trip->load([
             'company',
             'customers',
             'itineraries.itineraryDays.destinations.destination',
             'itineraries.itineraryFlights',
             'itineraries.itineraryAccommodation',
+            'paymentPlans',
         ]));
     }
 
@@ -211,6 +242,14 @@ class TripController extends Controller
         }
 
         $itinerary->update(['status' => ItineraryStatus::CONFIRMED->value]);
+
+        // Auto-create the trip's default payment plans (a full lump-sum option and a
+        // 3-installment option — see DefaultPaymentPlanService) now that its cost is settled.
+        // Idempotent, so re-accepting (or accepting a different option later) never duplicates
+        // them; a company that already hand-built a CUSTOM plan for this trip keeps it.
+        $itinerary->loadMissing(['itineraryFlights', 'itineraryAccommodation', 'itineraryDays.destinations']);
+        $cost = ItineraryHelper::calculateItineraryCost($itinerary);
+        DefaultPaymentPlanService::createDefaults($trip, (float) $cost['total'], $cost['currency'], $trip->start_date);
 
         $trip->loadMissing(['company', 'createdBy', 'customers']);
         $customerName = trim($trip->customers->map(fn ($c) => trim("{$c->first_name} {$c->last_name}"))->filter()->first() ?? '') ?: 'The traveler';

@@ -46,6 +46,7 @@ class WeWireDisbursement extends Model
         'fee',
         'status',
         'failure_reason',
+        'is_simulated',
         'initiated_at',
         'settled_at',
     ];
@@ -54,6 +55,7 @@ class WeWireDisbursement extends Model
         'amount' => 'float',
         'fee' => 'float',
         'status' => DisbursementStatus::class,
+        'is_simulated' => 'boolean',
         'initiated_at' => 'datetime',
         'settled_at' => 'datetime',
     ];

@@ -14,6 +14,7 @@ use App\Models\ItineraryFlight;
 use App\Models\ItineraryAccommodation;
 use App\Models\ItineraryDayDestination;
 use App\Models\Trip;
+use App\Services\DefaultPaymentPlanService;
 use App\Services\IdGeneratorService;
 use App\Services\SerpApiService;
 use Illuminate\Http\JsonResponse;
@@ -111,6 +112,16 @@ class ItineraryController extends Controller
         ]);
 
         $itinerary->update($validated);
+
+        // Staff confirming an option from the dashboard is a second path to the same "an
+        // itinerary just got accepted" moment as the public TripController::acceptItinerary —
+        // auto-create the trip's default payment plans here too, idempotently, so it doesn't
+        // matter which side (traveler or staff) does the confirming.
+        if (($validated['status'] ?? null) === ItineraryStatus::CONFIRMED->value) {
+            $itinerary->loadMissing(['itineraryFlights', 'itineraryAccommodation', 'itineraryDays.destinations']);
+            $cost = ItineraryHelper::calculateItineraryCost($itinerary);
+            DefaultPaymentPlanService::createDefaults($trip, (float) $cost['total'], $cost['currency'], $trip->start_date);
+        }
 
         return response()->json($itinerary);
     }

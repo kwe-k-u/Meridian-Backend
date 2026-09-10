@@ -11,6 +11,7 @@ use App\Services\IdGeneratorService;
 use App\Services\WeWireService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 
@@ -45,6 +46,7 @@ class WeWireAccountController extends Controller
         $validated = $request->validate([
             'currency' => ['required', 'string', Rule::in(WeWireVirtualAccount::SUPPORTED_CURRENCIES)],
             'source_of_funds' => 'nullable|string|max:100',
+            'confirm_simulated' => 'nullable|boolean',
         ]);
 
         $existingCount = $company->wewireAccounts()->count();
@@ -57,7 +59,33 @@ class WeWireAccountController extends Controller
         }
 
         $sourceOfFunds = $validated['currency'] === 'USD' ? ($validated['source_of_funds'] ?? 'BUSINESS_OPERATIONS') : null;
-        $result = $wewire->requestVirtualAccount($company->wewire_subcustomer_id, $validated['currency'], $sourceOfFunds);
+        $result = $wewire->requestVirtualAccount(
+            $company->wewire_subcustomer_id,
+            $validated['currency'],
+            $sourceOfFunds,
+            (bool) ($validated['confirm_simulated'] ?? false),
+        );
+
+        $source = $result['_wewire_meta']['source'] ?? 'live';
+
+        // WeWire's live API failed and the frontend hasn't yet asked to proceed with a
+        // simulated result — hand back both pieces so the "Response from wewire server" popup
+        // can let the user decide, without creating anything yet.
+        if ($source === 'simulated_fallback') {
+            Log::warning('WeWire virtual account request failed — offering simulated fallback', [
+                'company_id' => $company->company_id,
+                'currency' => $validated['currency'],
+                'error' => $result['_wewire_meta']['error'],
+            ]);
+
+            return response()->json([
+                'requires_confirmation' => true,
+                'title' => 'Response from wewire server',
+                'message' => 'WeWire did not accept this request. You can proceed with a simulated result instead.',
+                'error' => $result['_wewire_meta']['error'],
+                'simulated' => Arr::except($result, ['_wewire_meta']),
+            ], 409);
+        }
 
         if (!isset($result['id'])) {
             Log::warning('WeWire virtual account request failed', ['company_id' => $company->company_id, 'currency' => $validated['currency'], 'response' => $result]);
@@ -71,6 +99,7 @@ class WeWireAccountController extends Controller
             'wewire_account_id' => $result['id'],
             'status' => strtolower($result['status'] ?? VirtualAccountStatus::REQUESTED->value),
             'fund_handling' => FundHandling::HOLD->value,
+            'is_simulated' => $source === 'simulated_confirmed',
         ]);
 
         return response()->json($account, 201);

@@ -86,6 +86,10 @@ Route::prefix('public')->group(function () {
     // ── [WeWire Public Collection Page] ── Reachable via the shareable /pay/{reference} link
     // — no Meridian account required. See WeWirePaymentController::lookupPublic.
     Route::get('/payments/wewire/lookup/{reference}', [WeWirePaymentController::class, 'lookupPublic']);
+    // "Proceed with payment" button — only responds while WeWire is in simulation mode (see
+    // WeWirePaymentController::simulatePublicPayment). WeWire has no real hosted checkout, so
+    // this stands in for someone actually transferring the money.
+    Route::post('/payments/wewire/simulate/{reference}', [WeWirePaymentController::class, 'simulatePublicPayment']);
 
     // ── [Demo Invite Routes] ── Landing-page validation + acceptance for a demo-invite link
     // emailed by DemoInviteController::store() (registered below, behind auth:sanctum).
@@ -185,6 +189,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{conversation}/messages', [ConversationController::class, 'sendMessage']);
         Route::post('/{conversation}/suggest-reply', [ConversationController::class, 'suggestReply']);
         Route::post('/{conversation}/request-travel-details', [ConversationController::class, 'requestTravelDetails']);
+        Route::post('/{conversation}/extract-trip-details', [ConversationController::class, 'extractTripDetails']);
     });
 
     // ── [Gmail Thread Routes] ── Browse a connected mailbox and opt specific threads into

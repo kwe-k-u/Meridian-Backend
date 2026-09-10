@@ -3,13 +3,15 @@
 namespace App\Services;
 
 /**
- * Hardcoded currency conversion for the currencies used across the app (trip budgets,
+ * Fallback currency conversion table for the currencies used across the app (trip budgets,
  * itinerary flight/accommodation costs, transactions, and company display preference).
  *
- * There's no live rates API wired up — RATES below is a snapshot of real mid-market rates
- * (GHS per 1 unit of the currency) pulled manually and needs refreshing by hand as rates move.
- * Last refreshed: 2026-07-09, from Wise/XE (~1 USD = 11.42 GHS, ~1 EUR = 13.05 GHS,
- * ~1 GBP = 15.26 GHS).
+ * Live rates now come from WeWire's Rates API (see App\Services\WeWireService::getPairRate,
+ * used by App\Http\Controllers\CurrencyController) — RATES below is only used when that call
+ * fails for a given currency (WeWire unreachable, bad response, etc). It's a snapshot of real
+ * mid-market rates (GHS per 1 unit of the currency) pulled manually and needs refreshing by
+ * hand as rates move. Last refreshed: 2026-07-09, from Wise/XE (~1 USD = 11.42 GHS,
+ * ~1 EUR = 13.05 GHS, ~1 GBP = 15.26 GHS).
  */
 class CurrencyService
 {

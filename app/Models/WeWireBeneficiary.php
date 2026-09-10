@@ -35,14 +35,23 @@ class WeWireBeneficiary extends Model
         'label',
         'wewire_beneficiary_id',
         'currency',
+        'country',
         'account_name',
         'bank_name',
+        'address_line1',
+        'city',
         'account_number',
         'iban',
         'sort_code',
         'routing_number',
+        'account_category',
         'swift_bic',
         'settlement_method',
+        'is_simulated',
+    ];
+
+    protected $casts = [
+        'is_simulated' => 'boolean',
     ];
 
     public function company(): BelongsTo

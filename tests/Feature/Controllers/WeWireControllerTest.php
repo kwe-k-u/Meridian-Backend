@@ -144,6 +144,88 @@ test('public lookup resolves a payment plan by its reference code', function () 
         ->assertJsonPath('payment_account', null); // no ACTIVE virtual account provisioned yet
 });
 
+test('the public pay page verifies the account live with WeWire before letting the customer proceed', function () {
+    Http::fake(fn () => Http::response(['id' => 'wewire-acc-live-1', 'status' => 'ACTIVE'], 200));
+
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $company = $trip->company;
+    $company->update(['wewire_subcustomer_id' => 'wewire-sub-verify-1']);
+    $this->actingAs($user, 'sanctum');
+
+    WeWireVirtualAccount::create([
+        'id' => 'VAC_VERIFY001', 'company_id' => $company->company_id, 'currency' => 'GHS',
+        'status' => 'active', 'wewire_account_id' => 'wewire-acc-live-1',
+    ]);
+
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 400, 'currency' => 'GHS', 'installments' => [['amount' => 400]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    $res = $this->postJson("/api/public/payments/wewire/simulate/{$reference}");
+
+    $res->assertStatus(200)->assertJsonPath('verified', true)->assertJsonPath('outstanding', 400);
+    Http::assertSent(fn ($request) => str_contains($request->url(), '/accounts/wewire-acc-live-1'));
+    $this->assertDatabaseMissing('wewire_inbound_transactions', ['matched_payment_reference' => $reference]);
+});
+
+test('the public pay page offers the simulated fallback when the account fails live verification', function () {
+    Http::fake(fn () => Http::response(['status' => 'REJECTED', 'message' => 'Business KYC is still under review'], 200));
+
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $company = $trip->company;
+    $company->update(['wewire_subcustomer_id' => 'wewire-sub-verify-2']);
+    $this->actingAs($user, 'sanctum');
+
+    WeWireVirtualAccount::create([
+        'id' => 'VAC_VERIFY002', 'company_id' => $company->company_id, 'currency' => 'GHS',
+        'status' => 'active', 'wewire_account_id' => 'wewire-acc-blocked-1', 'is_simulated' => true,
+    ]);
+
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 250, 'currency' => 'GHS', 'installments' => [['amount' => 250]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    $res = $this->postJson("/api/public/payments/wewire/simulate/{$reference}");
+    $res->assertStatus(409)
+        ->assertJsonPath('requires_confirmation', true)
+        ->assertJsonPath('title', 'Response from wewire server');
+    $this->assertDatabaseMissing('wewire_inbound_transactions', ['matched_payment_reference' => $reference]);
+
+    config(['services.wewire.simulate' => true]);
+    $confirmed = $this->postJson("/api/public/payments/wewire/simulate/{$reference}", ['confirm_simulated' => true]);
+    $confirmed->assertStatus(200)->assertJsonPath('outstanding', 0);
+    $this->assertDatabaseHas('wewire_inbound_transactions', ['matched_payment_reference' => $reference, 'is_simulated' => true]);
+});
+
+test('confirming a simulated public payment is refused when WeWire simulation mode is off', function () {
+    Http::fake(fn () => Http::response(['status' => 'REJECTED'], 200));
+    config(['services.wewire.simulate' => false]);
+
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $company = $trip->company;
+    $this->actingAs($user, 'sanctum');
+
+    WeWireVirtualAccount::create([
+        'id' => 'VAC_VERIFY003', 'company_id' => $company->company_id, 'currency' => 'GHS', 'status' => 'active',
+    ]);
+
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 100, 'currency' => 'GHS', 'installments' => [['amount' => 100]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    $res = $this->postJson("/api/public/payments/wewire/simulate/{$reference}", ['confirm_simulated' => true]);
+    $res->assertStatus(403);
+});
+
 test('webhook rejects a request with an invalid signature', function () {
     config(['services.wewire.webhook_secret' => 'whsec_' . base64_encode('unit-test-secret')]);
 
@@ -583,6 +665,8 @@ test('beneficiary creation is simulated and never hits the real WeWire API', fun
         'account_name' => 'Emirates Airlines Ltd',
         'country' => 'ARE',
         'settlement_method' => 'WIRE',
+        'routing_number' => '021000021',
+        'account_category' => 'CHECKING',
         'address_line1' => '1 Airport Road',
         'city' => 'Dubai',
     ]);
@@ -652,4 +736,134 @@ test('virtual account requests are NOT simulated and still call the real API', f
 
     $res->assertStatus(201)->assertJsonPath('wewire_account_id', 'wewire-va-real-1');
     Http::assertSent(fn ($request) => str_contains($request->url(), '/accounts/request'));
+});
+
+test('a virtual account request WeWire accepts but blocks (e.g. business still in review) also offers the simulated fallback', function () {
+    // 200 OK, but no account `id` — WeWire accepted the HTTP call yet couldn't actually issue
+    // an account (blocked pending business/KYC review). Not an HTTP failure, so this only
+    // reaches the popup because of WeWireService::liveCall's $isUsable check.
+    Http::fake(fn () => Http::response(['status' => 'REJECTED', 'message' => 'Business KYC is still under review'], 200));
+
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['wewire_subcustomer_id' => 'wewire-sub-in-review-1']);
+    $company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
+    $this->actingAs($user, 'sanctum');
+
+    $res = $this->postJson('/api/wewire/accounts', ['currency' => 'USD']);
+
+    $res->assertStatus(409)
+        ->assertJsonPath('requires_confirmation', true)
+        ->assertJsonPath('title', 'Response from wewire server')
+        ->assertJsonPath('error.status', 200)
+        ->assertJsonPath('error.body.message', 'Business KYC is still under review');
+    $this->assertDatabaseMissing('wewire_virtual_accounts', ['company_id' => $company->company_id]);
+
+    $confirmed = $this->postJson('/api/wewire/accounts', ['currency' => 'USD', 'confirm_simulated' => true]);
+    $confirmed->assertStatus(201)->assertJsonPath('is_simulated', true);
+});
+
+test('a failed virtual account request offers a simulated fallback instead of erroring out', function () {
+    Http::fake(fn () => Http::response(['message' => 'Service unavailable'], 503));
+
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['wewire_subcustomer_id' => 'wewire-sub-fallback-1']);
+    $company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
+    $this->actingAs($user, 'sanctum');
+
+    $res = $this->postJson('/api/wewire/accounts', ['currency' => 'USD']);
+
+    $res->assertStatus(409)
+        ->assertJsonPath('requires_confirmation', true)
+        ->assertJsonPath('title', 'Response from wewire server')
+        ->assertJsonPath('error.status', 503);
+    $this->assertNotNull($res->json('simulated.id'));
+    $this->assertDatabaseMissing('wewire_virtual_accounts', ['company_id' => $company->company_id]);
+
+    // The frontend resubmits with confirm_simulated after the user accepts the popup.
+    $confirmed = $this->postJson('/api/wewire/accounts', ['currency' => 'USD', 'confirm_simulated' => true]);
+    $confirmed->assertStatus(201)->assertJsonPath('is_simulated', true);
+    $this->assertDatabaseHas('wewire_virtual_accounts', ['company_id' => $company->company_id, 'is_simulated' => true]);
+});
+
+test('a failed real beneficiary creation offers a simulated fallback instead of erroring out', function () {
+    // WEWIRE_SIMULATE is off (as it would be once real KYC/beneficiary creation is unblocked),
+    // so createBeneficiary is genuinely live — and WeWire's sandbox 503ing (a real failure mode
+    // hit during development) should offer the same fallback popup as everything else.
+    config(['services.wewire.simulate' => false]);
+    Http::fake(fn () => Http::response('<html>503 Service Temporarily Unavailable</html>', 503));
+
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $company->users()->attach($user->user_id, [
+        'role' => 'owner', 'is_default' => true, 'is_enabled' => true, 'joined_at' => now(),
+    ]);
+    $this->actingAs($user, 'sanctum');
+
+    $payload = [
+        'beneficiary_type' => 'provider',
+        'label' => 'Emirates Airlines',
+        'currency' => 'USD',
+        'account_name' => 'Emirates Airlines Ltd',
+        'country' => 'ARE',
+        'settlement_method' => 'WIRE',
+        'routing_number' => '021000021',
+        'account_category' => 'CHECKING',
+        'address_line1' => '1 Airport Road',
+        'city' => 'Dubai',
+    ];
+
+    $res = $this->postJson('/api/wewire/beneficiaries', $payload);
+    $res->assertStatus(409)
+        ->assertJsonPath('requires_confirmation', true)
+        ->assertJsonPath('title', 'Response from wewire server');
+    $this->assertDatabaseMissing('wewire_beneficiaries', ['company_id' => $company->company_id]);
+
+    $confirmed = $this->postJson('/api/wewire/beneficiaries', array_merge($payload, ['confirm_simulated' => true]));
+    $confirmed->assertStatus(201)->assertJsonPath('is_simulated', true);
+    $this->assertDatabaseHas('wewire_beneficiaries', ['company_id' => $company->company_id, 'is_simulated' => true]);
+});
+
+test('a failed trip payout offers a simulated fallback that the dashboard can confirm', function () {
+    Http::fake(fn () => Http::response(['message' => 'Gateway timeout'], 504));
+
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $company = $trip->company;
+    $this->actingAs($user, 'sanctum');
+
+    $account = WeWireVirtualAccount::create([
+        'id' => 'VAC_FALLBK01', 'company_id' => $company->company_id, 'currency' => 'USD', 'status' => 'active',
+    ]);
+    $beneficiary = WeWireBeneficiary::create([
+        'id' => 'WBN_FALLBK01', 'company_id' => $company->company_id, 'currency' => 'USD',
+        'account_name' => 'Agency Payout', 'settlement_method' => 'WIRE',
+    ]);
+    $account->update(['beneficiary_account_id' => $beneficiary->id]);
+
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 300, 'currency' => 'USD', 'installments' => [['amount' => 300]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    postSignedWebhook('transaction.pay_in', [
+        'id' => 'wewire-tx-fallback-1', 'amount' => 300, 'currency' => 'USD', 'reference' => "Ref {$reference}",
+    ])->assertStatus(200);
+
+    $payout = $this->postJson("/api/trips/{$trip->trip_id}/payout", ['beneficiary_id' => $beneficiary->id]);
+    $payout->assertStatus(409)
+        ->assertJsonPath('requires_confirmation', true)
+        ->assertJsonPath('title', 'Response from wewire server')
+        ->assertJsonPath('error.status', 504);
+    $this->assertDatabaseMissing('wewire_disbursements', ['source_trip_id' => $trip->trip_id]);
+
+    $confirmed = $this->postJson("/api/trips/{$trip->trip_id}/payout", [
+        'beneficiary_id' => $beneficiary->id, 'confirm_simulated' => true,
+    ]);
+    $confirmed->assertStatus(201)->assertJsonPath('is_simulated', true)->assertJsonPath('amount', 300);
+    $this->assertDatabaseHas('wewire_disbursements', ['source_trip_id' => $trip->trip_id, 'is_simulated' => true]);
 });

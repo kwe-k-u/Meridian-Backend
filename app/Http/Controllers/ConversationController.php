@@ -230,9 +230,10 @@ class ConversationController extends Controller
         return response()->json($result);
     }
 
-    // POST /api/conversations/{conversation}/suggest-reply — Asks meridian-ai for draft reply
-    // suggestions based on this thread's history (and the linked trip's context, if any). Only
-    // called when the agent explicitly clicks "Suggest reply" in the UI — never automatically.
+    // POST /api/conversations/{conversation}/request-travel-details — Asks meridian-ai to draft
+    // reply options that ask the traveler for missing trip details, when the agent judges the
+    // thread doesn't have enough to plan from yet. Distinct from extractTripDetails() below,
+    // which reads what's *already* in the thread rather than asking for more.
     public function requestTravelDetails(Request $request, Conversation $conversation, MeridianAiService $ai): JsonResponse
     {
         $company = UserHelper::user_company($request);
@@ -261,7 +262,7 @@ class ConversationController extends Controller
         ] : null;
 
         try {
-            $result = $ai->suggestResponse([
+            $result = $ai->requestTravelDetails([
                 'conversation_history' => $history,
                 'trip_context' => $tripContext,
                 'num_suggestions' => 3,
@@ -270,6 +271,57 @@ class ConversationController extends Controller
             report($e);
             return response()->json(['message' => 'Could not draft a suggestion right now.'], 502);
         }
+
+        return response()->json($result);
+    }
+
+    // POST /api/conversations/{conversation}/extract-trip-details — "Create trip from this
+    // chat" (see Messages.tsx / CreateTripModal.tsx): reads the thread and pulls out whatever
+    // structured trip request is already in it — destinations, dates, budget, a suggested
+    // name/description — so CreateTripModal can open straight to a prefilled confirmation
+    // screen instead of the normal customer/mode/draft setup steps. The agent still reviews
+    // and can edit every field before the trip actually gets created (see
+    // TripController::store, called separately once confirmed).
+    public function extractTripDetails(Request $request, Conversation $conversation, MeridianAiService $ai): JsonResponse
+    {
+        $company = UserHelper::user_company($request);
+        if ($conversation->company_id !== $company->company_id) {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+        if ($conversation->channel !== 'gmail') {
+            return response()->json(['message' => 'Extraction is only supported for Gmail conversations right now.'], 422);
+        }
+
+        $conversation->loadMissing(['customer', 'messages' => fn ($q) => $q->orderBy('sent_at')->limit(30)]);
+
+        if ($conversation->messages->isEmpty()) {
+            return response()->json(['message' => 'This conversation has no messages yet.'], 422);
+        }
+
+        $history = $conversation->messages->map(fn (Message $m) => [
+            'role' => $m->direction === 'outbound' ? 'assistant' : 'user',
+            'content' => $m->body_text ?? $m->snippet ?? '',
+            'timestamp' => $m->sent_at?->toIso8601String(),
+        ])->all();
+
+        $knownTravelerName = $conversation->customer
+            ? trim("{$conversation->customer->first_name} {$conversation->customer->last_name}")
+            : null;
+
+        try {
+            $result = $ai->extractTripDetails([
+                'conversation_history' => $history,
+                'known_traveler_name' => $knownTravelerName ?: null,
+            ]);
+        } catch (RuntimeException $e) {
+            report($e);
+            return response()->json(['message' => 'Could not read this conversation right now.'], 502);
+        }
+
+        // The matched customer (if any) rides along separately from the AI's own guess, so the
+        // frontend can prefer the real record over "traveler_name" when deciding who to attach
+        // the trip to.
+        $result['customer'] = $conversation->customer;
 
         return response()->json($result);
     }

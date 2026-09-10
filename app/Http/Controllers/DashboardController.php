@@ -26,10 +26,22 @@ class DashboardController extends Controller
         // active company. So dashboard totals can include more than one company's data.
         $companyIds = $user->companies->pluck('company_id');
 
+        // start_date/end_date are cast to Carbon dates (see Trip::$casts) so left as-is they'd
+        // serialize with a full ISO datetime + timezone (e.g. "2026-09-10T00:00:00.000000Z").
+        // The frontend's fmtDate() expects a plain "YYYY-MM-DD" (it appends its own "T00:00:00"
+        // before parsing — see Dashboard.tsx), so map to toDateString() the same way
+        // ConversationController/TripController already do for trip dates.
         $latestTrips = Trip::whereIn('company_id', $companyIds)
             ->orderBy('created_at', 'desc')
             ->take(4)
-            ->get(['trip_id', 'trip_name', 'status', 'start_date', 'end_date']);
+            ->get(['trip_id', 'trip_name', 'status', 'start_date', 'end_date'])
+            ->map(fn (Trip $trip) => [
+                'trip_id' => $trip->trip_id,
+                'trip_name' => $trip->trip_name,
+                'status' => $trip->status->value,
+                'start_date' => $trip->start_date?->toDateString(),
+                'end_date' => $trip->end_date?->toDateString(),
+            ]);
 
         // Each of the four metrics below re-runs the same "find transactions whose
         // trip_payment.trip belongs to one of my companies" subquery, then filters by

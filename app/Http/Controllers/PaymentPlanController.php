@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\InstallmentStatus;
 use App\Enums\PaymentPlanStatus;
+use App\Enums\PaymentPlanType;
 use App\Helpers\UserHelper;
 use App\Models\Installment;
 use App\Models\PaymentPlan;
@@ -15,15 +16,18 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Creates and manages a trip's WeWire installment plan — either a single lump-sum
- * "installment" or a fixed set the agency defines up front. This is what the public
+ * Creates and manages a trip's WeWire installment plan(s). Since DefaultPaymentPlanService
+ * auto-creates a FULL + INSTALLMENTS pair once an itinerary is accepted, this controller is now
+ * mainly for the CUSTOM plan a staffer can hand-build on top of (or instead of) those defaults
+ * — up to one CUSTOM plan per trip (unique(trip_id, plan_type)). This is what the public
  * /pay/:reference collection page (WeWirePaymentController::lookupPublic) resolves.
  *
  * Routes: /api/trips/{trip}/payment-plan, /api/payment-plans/{plan}/reference (authenticated).
  */
 class PaymentPlanController extends Controller
 {
-    // POST /api/trips/{trip}/payment-plan — one plan per trip (unique trip_id). Installment
+    // POST /api/trips/{trip}/payment-plan — creates this trip's CUSTOM plan (one per trip —
+    // the FULL/INSTALLMENTS defaults live in separate slots, see PaymentPlanType). Installment
     // amounts must sum exactly to total_amount (a single lump-sum "installment" is just a
     // plan with one row). Auto-generates the reference code via ReferenceCodeGenerator.
     public function store(Request $request, Trip $trip): JsonResponse
@@ -57,6 +61,7 @@ class PaymentPlanController extends Controller
                 'payment_reference' => ReferenceCodeGenerator::generate(),
                 'total_amount' => $validated['total_amount'],
                 'currency' => $validated['currency'],
+                'plan_type' => PaymentPlanType::CUSTOM->value,
                 'status' => PaymentPlanStatus::ACTIVE->value,
                 'created_by' => $request->user()->user_id,
             ]);
@@ -79,7 +84,11 @@ class PaymentPlanController extends Controller
         return response()->json($plan->load('installments'), 201);
     }
 
-    // GET /api/trips/{trip}/payment-plan
+    // GET /api/trips/{trip}/payment-plan — the trip's CUSTOM plan specifically (see
+    // Trip::paymentPlan()'s scope), for the dashboard's manual "set up installment plan" panel.
+    // Doesn't include the FULL/INSTALLMENTS defaults DefaultPaymentPlanService may have already
+    // created — those aren't staff-managed, they're just reference codes on the traveler's pay
+    // page (see TripController::publicShow / TravelerView.tsx).
     public function show(Request $request, Trip $trip): JsonResponse
     {
         $company = UserHelper::user_company($request);
