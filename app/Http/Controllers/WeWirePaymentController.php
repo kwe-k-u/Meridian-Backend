@@ -164,10 +164,12 @@ class WeWirePaymentController extends Controller
     // class docblock), so this live check is the real thing being attempted here. If it comes
     // back verified, nothing is simulated: the response just confirms the account is ready and
     // the customer should go ahead and transfer for real (the webhook will confirm it later).
-    // If the live check fails or the account isn't really active (e.g. one that only exists
-    // because WeWireAccountController::store's own fallback was used to force it through), this
-    // returns 409 with the "Response from wewire server" popup payload instead of pretending to
-    // pay.
+    // If the live check fails, the account isn't really active (e.g. one that only exists
+    // because WeWireAccountController::store's own fallback was used to force it through), or
+    // there's no active account in the chosen currency at all yet, this returns 409 with the
+    // "Response from wewire server" popup payload instead of pretending to pay or hard-blocking
+    // the traveler — every payable currency stays clickable on the pay page regardless of
+    // provisioning status (see PAYABLE_CURRENCIES / buildLookupResponse).
     //
     // Phase 2 ($confirmSimulated = true): the customer accepted that popup. Settles every
     // outstanding installment in full, one simulated inbound transaction at a time (flagged
@@ -200,22 +202,29 @@ class WeWirePaymentController extends Controller
             ->where('status', VirtualAccountStatus::ACTIVE->value)
             ->first();
 
-        if (!$account) {
-            return response()->json(['message' => "Your agency hasn't finished setting up payments in {$currency} yet."], 422);
-        }
-
         $confirmSimulated = $request->boolean('confirm_simulated');
 
         if (!$confirmSimulated) {
-            $company = $plan->trip->company;
-
-            if (!$company->wewire_subcustomer_id || !$account->wewire_account_id) {
-                $liveMeta = ['source' => 'simulated_fallback', 'error' => ['status' => null, 'body' => 'No WeWire account reference on file for this company.']];
+            if (!$account) {
+                // Nothing provisioned in this currency at all — there's no WeWire account id to
+                // even ask about, so this is a straightforward simulated-fallback offer rather
+                // than a hard block. The popup still shows the customer exactly why (no real
+                // account exists yet), same as every other WeWire-backed action on this app.
+                $liveMeta = ['source' => 'simulated_fallback', 'error' => [
+                    'status' => null,
+                    'body' => "No active {$currency} virtual account exists for this company yet.",
+                ]];
             } else {
-                $wewire = app(WeWireService::class);
-                $result = $wewire->getVirtualAccount($company->wewire_subcustomer_id, $account->wewire_account_id);
-                $liveMeta = $result['_wewire_meta'] ?? ['source' => 'live'];
-                $liveMeta['status'] = strtoupper($result['status'] ?? '');
+                $company = $plan->trip->company;
+
+                if (!$company->wewire_subcustomer_id || !$account->wewire_account_id) {
+                    $liveMeta = ['source' => 'simulated_fallback', 'error' => ['status' => null, 'body' => 'No WeWire account reference on file for this company.']];
+                } else {
+                    $wewire = app(WeWireService::class);
+                    $result = $wewire->getVirtualAccount($company->wewire_subcustomer_id, $account->wewire_account_id);
+                    $liveMeta = $result['_wewire_meta'] ?? ['source' => 'live'];
+                    $liveMeta['status'] = strtoupper($result['status'] ?? '');
+                }
             }
 
             if (($liveMeta['source'] ?? null) === 'live' && ($liveMeta['status'] ?? null) === strtoupper(VirtualAccountStatus::ACTIVE->value)) {
@@ -226,16 +235,19 @@ class WeWirePaymentController extends Controller
 
             Log::warning('WeWire virtual account failed live verification on the public pay page', [
                 'payment_reference' => $plan->payment_reference,
-                'account_id' => $account->id,
+                'account_id' => $account->id ?? null,
+                'currency' => $currency,
                 'meta' => $liveMeta,
             ]);
 
             return response()->json([
                 'requires_confirmation' => true,
                 'title' => 'Response from wewire server',
-                'message' => ($liveMeta['source'] ?? null) === 'live'
-                    ? "WeWire reports this account isn't active yet (status: {$liveMeta['status']}). You can proceed with a simulated payment instead."
-                    : 'WeWire did not confirm this account is ready to receive payment. You can proceed with a simulated payment instead.',
+                'message' => !$account
+                    ? "Your agency hasn't finished setting up payments in {$currency} yet. You can proceed with a simulated payment instead."
+                    : (($liveMeta['source'] ?? null) === 'live'
+                        ? "WeWire reports this account isn't active yet (status: {$liveMeta['status']}). You can proceed with a simulated payment instead."
+                        : 'WeWire did not confirm this account is ready to receive payment. You can proceed with a simulated payment instead.'),
                 'error' => $liveMeta['error'] ?? ['status' => 200, 'body' => ['status' => $liveMeta['status'] ?? null]],
             ], 409);
         }
@@ -254,7 +266,7 @@ class WeWirePaymentController extends Controller
             $inbound = WeWireInboundTransaction::create([
                 'id' => IdGeneratorService::generateId('WIT'),
                 'wewire_transaction_id' => IdGeneratorService::generateId('SIM'),
-                'virtual_account_id' => $account->id,
+                'virtual_account_id' => $account?->id,
                 'amount' => $amount,
                 'currency' => $currency,
                 'reference_raw' => $plan->payment_reference,

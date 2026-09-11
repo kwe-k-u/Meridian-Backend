@@ -150,6 +150,37 @@ test('public lookup resolves a payment plan by its reference code', function () 
     expect($options['GHS']['account'])->toBeNull();
 });
 
+test('proceeding to pay in a currency with no account at all offers the simulated fallback instead of a hard block', function () {
+    config(['services.wewire.allow_simulated_payments' => true]);
+
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $this->actingAs($user, 'sanctum');
+
+    // No WeWireVirtualAccount exists for this company in any currency — PAYABLE_CURRENCIES
+    // still lets the traveler pick USD, and "Proceed" should offer the same popup every other
+    // WeWire-backed action gets, not a dead-end error.
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 75, 'currency' => 'USD', 'installments' => [['amount' => 75]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    $res = $this->postJson("/api/public/payments/wewire/simulate/{$reference}", ['currency' => 'USD']);
+    $res->assertStatus(409)
+        ->assertJsonPath('requires_confirmation', true)
+        ->assertJsonPath('title', 'Response from wewire server')
+        ->assertJsonPath('error.body', 'No active USD virtual account exists for this company yet.');
+
+    $confirmed = $this->postJson("/api/public/payments/wewire/simulate/{$reference}", [
+        'currency' => 'USD', 'confirm_simulated' => true,
+    ]);
+    $confirmed->assertStatus(200)->assertJsonPath('outstanding', 0);
+    $this->assertDatabaseHas('wewire_inbound_transactions', [
+        'matched_payment_reference' => $reference, 'is_simulated' => true, 'virtual_account_id' => null,
+    ]);
+});
+
 test('the public pay page verifies the account live with WeWire before letting the customer proceed', function () {
     Http::fake(fn () => Http::response(['id' => 'wewire-acc-live-1', 'status' => 'ACTIVE'], 200));
 
