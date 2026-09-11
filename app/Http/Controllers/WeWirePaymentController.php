@@ -102,6 +102,7 @@ class WeWirePaymentController extends Controller
                 'id' => $installment->id,
                 'sequence' => $installment->sequence,
                 'amount' => $installment->amount,
+                'currency' => $installment->currency,
                 'due_date' => $installment->due_date,
                 'status' => $installment->status,
                 'paid_amount' => $paid,
