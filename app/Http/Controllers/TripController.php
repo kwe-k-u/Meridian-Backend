@@ -309,7 +309,9 @@ class TripController extends Controller
             'tripPayments.transaction',
         ]);
 
-        // Calculate costs for all itineraries
+        // Calculate costs for all itineraries — kept in the response as a per-option
+        // breakdown (the frontend picks a single entry out of `itineraries` by index to
+        // display in the cost sidebar for whichever option is selected).
         $itineraryCosts = $trip->itineraries->map(fn($itin) => ItineraryHelper::calculateItineraryCost($itin));
 
         // Payments
@@ -323,13 +325,25 @@ class TripController extends Controller
             'notes' => $tp->notes,
         ])->values();
 
-        $totalPaid = (float) $payments->where('status', 'completed')->sum('amount');
-        $totalPending = (float) $payments->where('status', 'pending')->sum('amount');
+        // The summary's total_cost must match the *one* itinerary a trip is actually being
+        // charged against — same confirmed-else-first selection as TripController::index's
+        // computed_total — not every draft option a trip happens to have lying around. Summing
+        // all of them (the previous behavior) made "Outstanding" balloon far past "Trip value"
+        // on any trip with more than one AI-generated option, since only one is ever accepted.
+        $selectedItinerary = $trip->itineraries->firstWhere('status', ItineraryStatus::CONFIRMED) ?? $trip->itineraries->first();
+        $selectedCost = $selectedItinerary ? ItineraryHelper::calculateItineraryCost($selectedItinerary) : null;
+        $totalTripCost = $selectedCost['total'] ?? 0;
+        $currency = $selectedCost['currency'] ?? 'USD';
 
-        // Overall trip summary (sum of ALL itineraries' totals, not just the one currently
-        // shown in the UI — the frontend picks a single entry out of `itineraries` by index
-        // to display in the cost sidebar for whichever option is selected).
-        $totalTripCost = $itineraryCosts->sum('total');
+        // A manually-recorded payment (recordTripPayment) can be logged in any currency, and a
+        // trip's itinerary cost can be edited/regenerated after some payments already exist —
+        // summing raw amounts across mismatched currencies without converting would silently
+        // produce a nonsense "outstanding" figure (same bug class already fixed for WeWire
+        // collections — see Installment::paidAmount()).
+        $totalPaid = (float) $payments->where('status', 'completed')
+            ->sum(fn($p) => \App\Services\CurrencyService::convert($p['amount'], $p['currency'], $currency));
+        $totalPending = (float) $payments->where('status', 'pending')
+            ->sum(fn($p) => \App\Services\CurrencyService::convert($p['amount'], $p['currency'], $currency));
 
         return [
             'trip_id' => $trip->trip_id,
@@ -337,8 +351,9 @@ class TripController extends Controller
             'payments' => $payments,
             'summary' => [
                 'total_cost' => $totalTripCost,
-                'total_paid' => $totalPaid,
-                'total_pending' => $totalPending,
+                'currency' => $currency,
+                'total_paid' => round($totalPaid, 2),
+                'total_pending' => round($totalPending, 2),
                 'outstanding' => round($totalTripCost - $totalPaid, 2),
             ],
         ];
