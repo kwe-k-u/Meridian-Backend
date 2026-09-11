@@ -117,6 +117,10 @@ class TripController extends Controller
             'itineraries.itineraryAccommodation',
             'calls.actionItems',
             'tripPayments.transaction',
+            // Every WeWire plan on the trip (full/installments/custom — see PaymentPlanType) so
+            // the dashboard can link straight to /pay/{reference} for whichever one applies —
+            // see TripDetail.tsx's "Pay with Mobile Money" button.
+            'paymentPlans',
         ]));
     }
 

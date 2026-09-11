@@ -8,9 +8,9 @@ use Illuminate\Support\Facades\Http;
 /**
  * Thin client for WeWire's payments-as-a-service API (https://docs.wewire.com/).
  *
- * Unlike Moolre, WeWire has no hosted-checkout/payment-link product — collection happens by
- * giving a customer a virtual account's bank details (or mobile-money instructions) to
- * transfer into directly. So this service only covers: business sub-customer + KYC
+ * WeWire has no hosted-checkout/payment-link product — collection happens by giving a customer
+ * a virtual account's bank details (or mobile-money instructions) to transfer into directly.
+ * So this service only covers: business sub-customer + KYC
  * onboarding, requesting multi-currency virtual accounts, beneficiaries, and payouts. The
  * actual "payment link" experience is a Meridian-hosted page (see WeWirePaymentController)
  * built entirely on top of these primitives.
@@ -96,6 +96,21 @@ class WeWireService
         return $this->post("/v1/subcustomers/{$subCustomerId}/beneficial-owners", array_merge($ownerData, [
             'idempotencyKey' => (string) \Illuminate\Support\Str::uuid(),
         ]));
+    }
+
+    // GET /v1/subcustomers/{id}/beneficial-owners — never simulated, used to look up an
+    // already-added owner's id (e.g. before updateBeneficialOwner()).
+    public function listBeneficialOwners(string $subCustomerId): array
+    {
+        return $this->get("/v1/subcustomers/{$subCustomerId}/beneficial-owners");
+    }
+
+    // PATCH /v1/subcustomers/{id}/beneficial-owners/{ownerId} — e.g. to add a `tin`/
+    // `taxResidenceCountry` after the fact, which WeWire requires per-owner before a USD
+    // virtual account request will succeed (see WeWireAccountController::store).
+    public function updateBeneficialOwner(string $subCustomerId, string $ownerId, array $data): array
+    {
+        return $this->patch("/v1/subcustomers/{$subCustomerId}/beneficial-owners/{$ownerId}", $data);
     }
 
     // POST /v1/subcustomers/{id}/kyc/submit — moves the sub-customer to IN_REVIEW.
@@ -241,6 +256,12 @@ class WeWireService
     private function post(string $path, array $payload): array
     {
         $response = Http::withHeaders($this->headers())->post("{$this->baseUrl}{$path}", $payload);
+        return $response->json() ?? [];
+    }
+
+    private function patch(string $path, array $payload): array
+    {
+        $response = Http::withHeaders($this->headers())->patch("{$this->baseUrl}{$path}", $payload);
         return $response->json() ?? [];
     }
 

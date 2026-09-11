@@ -187,7 +187,7 @@ class WeWirePaymentController extends Controller
             ], 409);
         }
 
-        if (!config('services.wewire.simulate')) {
+        if (!config('services.wewire.allow_simulated_payments')) {
             return response()->json(['message' => 'Simulated payments are only available while WeWire is in simulation mode.'], 403);
         }
 

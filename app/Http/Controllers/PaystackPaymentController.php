@@ -17,12 +17,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Hosted-checkout card/bank payments via Paystack (https://paystack.com/docs/), currently used
- * for tour operator subscription payments only (trip payments stay on Moolre for now).
+ * Hosted-checkout card/bank payments via Paystack (https://paystack.com/docs/), used for tour
+ * operator subscription payments (trip payments go through WeWire — see
+ * WeWirePaymentController).
  *
- * Unlike MoolrePaymentController::initiateSubscriptionPayment (which pays for a subscription
- * that already exists as `active`), this controller owns subscription creation itself: a
- * subscription can't be marked active before its payment is confirmed, so
+ * A subscription can't be marked active before its payment is confirmed, so
  * initiateSubscriptionPayment() creates the CompanySubscription as `pending` alongside the
  * pending Transaction/SubscriptionPayment, and syncStatusFromPaystack() is what flips both to
  * their final state once Paystack confirms the payment.
@@ -112,9 +111,8 @@ class PaystackPaymentController extends Controller
     // the request is authenticated a different way: Paystack signs the raw body with our
     // secret key (x-paystack-signature, HMAC-SHA512) and we verify that before trusting
     // anything in it. Even after that check passes, the payload's own status is never trusted
-    // directly — we still independently ask Paystack (server-to-server) what happened, same as
-    // Moolre's webhook. Always returns 200 unless the signature/reference is invalid, since
-    // Paystack retries on non-2xx.
+    // directly — we still independently ask Paystack (server-to-server) what happened. Always
+    // returns 200 unless the signature/reference is invalid, since Paystack retries on non-2xx.
     public function webhook(Request $request, PaystackService $paystack): JsonResponse
     {
         $signature = $request->header('x-paystack-signature');
@@ -140,8 +138,8 @@ class PaystackPaymentController extends Controller
     }
 
     // GET /api/payments/paystack/{transaction}/status — Polled by the frontend's post-checkout
-    // return page (the same PaymentCallback.tsx Moolre uses, distinguished by a `provider`
-    // query param) since the webhook can't reach a plain localhost backend in development.
+    // return page (PaymentCallback.tsx) since the webhook can't reach a plain localhost backend
+    // in development.
     public function status(Request $request, Transaction $transaction, PaystackService $paystack): JsonResponse
     {
         $company = UserHelper::user_company($request);

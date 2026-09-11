@@ -237,7 +237,7 @@ class AuthController extends Controller
                 'created_at' => now()
             ]);
 
-            $resetUrl = rtrim(config('services.moolre.frontend_url'), '/')
+            $resetUrl = rtrim(config('services.wewire.frontend_url'), '/')
                 . '/reset-password?token=' . urlencode($token) . '&email=' . urlencode($email);
 
             try {

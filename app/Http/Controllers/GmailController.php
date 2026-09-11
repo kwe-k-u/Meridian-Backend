@@ -72,10 +72,10 @@ class GmailController extends Controller
     // GET /api/gmail/callback — public; see class docblock.
     public function callback(Request $request): RedirectResponse
     {
-        // Reuses the same shared frontend-base-url config Moolre's redirect flows already read
-        // from (config/services.php's 'moolre.frontend_url', backed by FRONTEND_URL) rather
+        // Reuses the same shared frontend-base-url config WeWire's redirect flows already read
+        // from (config/services.php's 'wewire.frontend_url', backed by FRONTEND_URL) rather
         // than introducing a second config key for the same value.
-        $channelsUrl = rtrim(config('services.moolre.frontend_url'), '/') . '/app/settings/channels';
+        $channelsUrl = rtrim(config('services.wewire.frontend_url'), '/') . '/app/settings/channels';
 
         if ($request->filled('error') || !$request->filled('code') || !$request->filled('state')) {
             return redirect()->away($channelsUrl . '?gmail=error');

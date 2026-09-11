@@ -9,9 +9,9 @@ use Illuminate\Support\Facades\Http;
  *
  * Only the hosted-checkout ("transaction") flow is used: initializeTransaction() creates a
  * page the customer pays through, and verifyTransaction() lets us ask Paystack directly
- * (server-to-server, with our own secret key) what a payment's real status is. Unlike Moolre,
- * Paystack webhooks are signed (see PaystackPaymentController::webhook), but the webhook
- * handler still re-verifies via this class rather than trusting the payload's own status.
+ * (server-to-server, with our own secret key) what a payment's real status is. Paystack
+ * webhooks are signed (see PaystackPaymentController::webhook), but the webhook handler still
+ * re-verifies via this class rather than trusting the payload's own status.
  */
 class PaystackService
 {

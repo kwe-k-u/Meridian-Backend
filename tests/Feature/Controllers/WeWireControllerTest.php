@@ -197,7 +197,7 @@ test('the public pay page offers the simulated fallback when the account fails l
         ->assertJsonPath('title', 'Response from wewire server');
     $this->assertDatabaseMissing('wewire_inbound_transactions', ['matched_payment_reference' => $reference]);
 
-    config(['services.wewire.simulate' => true]);
+    config(['services.wewire.allow_simulated_payments' => true]);
     $confirmed = $this->postJson("/api/public/payments/wewire/simulate/{$reference}", ['confirm_simulated' => true]);
     $confirmed->assertStatus(200)->assertJsonPath('outstanding', 0);
     $this->assertDatabaseHas('wewire_inbound_transactions', ['matched_payment_reference' => $reference, 'is_simulated' => true]);
@@ -205,7 +205,7 @@ test('the public pay page offers the simulated fallback when the account fails l
 
 test('confirming a simulated public payment is refused when WeWire simulation mode is off', function () {
     Http::fake(fn () => Http::response(['status' => 'REJECTED'], 200));
-    config(['services.wewire.simulate' => false]);
+    config(['services.wewire.allow_simulated_payments' => false]);
 
     $user = User::factory()->create();
     $trip = Trip::factory()->create();

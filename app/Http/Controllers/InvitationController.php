@@ -50,7 +50,7 @@ class InvitationController extends Controller
         try {
             $company = Company::find($validated['company_id']);
             $inviter = User::find($validated['invited_by']);
-            $acceptUrl = rtrim(config('services.moolre.frontend_url'), '/') . '/accept-invite?token=' . urlencode($validated['token']);
+            $acceptUrl = rtrim(config('services.wewire.frontend_url'), '/') . '/accept-invite?token=' . urlencode($validated['token']);
 
             Mail::to($validated['email'])->send(new InvitationMail(
                 $company->company_name ?? 'Meridian',

@@ -43,23 +43,10 @@ return [
         'invite_expiry_days' => env('DEMO_INVITE_EXPIRY_DAYS', 30),
     ],
 
-    // Moolre (https://docs.moolre.com/) — mobile-money hosted-checkout payments.
-    // Sandbox only requires api_user; live also needs api_key (payment init) and
-    // api_pubkey (status checks). See App\Services\MoolreService.
-    'moolre' => [
-        'base_url' => env('MOOLRE_BASE_URL', 'https://sandbox.moolre.com'),
-        'api_user' => env('MOOLRE_API_USER'),
-        'api_key' => env('MOOLRE_PRIVATE_KEY'),
-        'api_pubkey' => env('MOOLRE_PUBLIC_KEY'),
-        'account_number' => env('MOOLRE_ACCOUNT_NUMBER'),
-        'callback_url' => env('MOOLRE_CALLBACK_URL'),
-        'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
-    ],
-
     // WeWire (https://docs.wewire.com/) — multi-currency virtual accounts, payouts/disbursement,
-    // and business KYC. Unlike Moolre there's no hosted checkout link product — customer
-    // collection happens via bank transfer/mobile money into a virtual account, reconciled by
-    // reference code (see App\Services\WeWireService, App\Http\Controllers\WeWirePaymentController).
+    // and business KYC. No hosted checkout link product — customer collection happens via bank
+    // transfer/mobile money into a virtual account, reconciled by reference code (see
+    // App\Services\WeWireService, App\Http\Controllers\WeWirePaymentController).
     'wewire' => [
         'base_url' => env('WEWIRE_BASE_URL', 'https://stage-capi.wewireafrica.com'),
         'api_key' => env('WEWIRE_API_KEY'),
@@ -70,6 +57,13 @@ return [
         // virtual accounts and payouts still hit the real API) until that's fixed. Set
         // WEWIRE_SIMULATE=false once WeWire confirms KYC/beneficiary creation works again.
         'simulate' => env('WEWIRE_SIMULATE', true),
+        // Gates WeWirePaymentController::simulatePublicPayment's "Proceed with payment"
+        // fallback — separate from `simulate` above because it protects a different thing:
+        // stopping a real customer from fabricating a real payment. That risk doesn't exist
+        // while every account still lives on WeWire's sandbox (stage-capi.wewireafrica.com)
+        // regardless of `simulate`, so this defaults on independently and should only be
+        // turned off once real bank transfers into a production WeWire account are possible.
+        'allow_simulated_payments' => env('WEWIRE_ALLOW_SIMULATED_PAYMENTS', true),
     ],
 
     // Paystack (https://paystack.com/docs/) — hosted-checkout card/bank payments, currently

@@ -50,7 +50,7 @@ class DemoInviteController extends Controller
             'expires_at' => now()->addDays((int) config('services.demo.invite_expiry_days', 30)),
         ]);
 
-        $joinUrl = rtrim(config('services.moolre.frontend_url'), '/') . '/demo/join?token=' . urlencode($invitation->token);
+        $joinUrl = rtrim(config('services.wewire.frontend_url'), '/') . '/demo/join?token=' . urlencode($invitation->token);
 
         try {
             Mail::to($invitation->email)->send(new DemoInvitationMail($request->user()->display_name, $joinUrl));

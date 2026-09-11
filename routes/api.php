@@ -15,7 +15,6 @@ use App\Http\Controllers\GmailController;
 use App\Http\Controllers\GmailThreadController;
 use App\Http\Controllers\InvitationController;
 use App\Http\Controllers\ItineraryController;
-use App\Http\Controllers\MoolrePaymentController;
 use App\Http\Controllers\PaymentPlanController;
 use App\Http\Controllers\PaystackPaymentController;
 use App\Http\Controllers\SubscriptionTierController;
@@ -49,10 +48,6 @@ Route::prefix('auth')->group(function() {
     Route::post('/reset-password', [AuthController::class, 'resetForgotPassword']);
 });
 
-// ── [Moolre Webhook] ── Public — Moolre has no way to send our bearer token. Not trusted
-// blindly: MoolrePaymentController::webhook() re-verifies status with Moolre itself.
-Route::post('/payments/moolre/webhook', [MoolrePaymentController::class, 'webhook']);
-
 // ── [WeWire Webhook] ── Public — signature-verified (see WeWireService::verifyWebhookSignature)
 // rather than trusted on the URL alone. See WeWirePaymentController docblock.
 Route::post('/payments/wewire/webhook', [WeWirePaymentController::class, 'webhook']);
@@ -74,21 +69,20 @@ Route::get('/gmail/callback', [GmailController::class, 'callback']);
 // ── [Public Traveler Routes] ── Reachable via the shareable /travel/{tripId} link — no
 // Meridian account required. trip_id itself (an unguessable generated ID, never sequential)
 // is the "credential" here, the same trust model the frontend's /travel/:tripId route already
-// uses. Scoped narrowly: read-only trip + cost view, and Moolre trip-payment initiation/status
-// — nothing here can mutate a trip/itinerary or reach another company's data.
+// uses. Scoped narrowly: read-only trip + cost view — nothing here can mutate a trip/itinerary
+// or reach another company's data.
 Route::prefix('public')->group(function () {
     Route::get('/trips/{trip}', [TripController::class, 'publicShow']);
     Route::get('/trips/{trip}/costs', [TripController::class, 'publicCosts']);
     Route::post('/trips/{trip}/itineraries/{itinerary}/accept', [TripController::class, 'acceptItinerary']);
-    Route::post('/payments/moolre/trip', [MoolrePaymentController::class, 'initiatePublicTripPayment']);
-    Route::get('/payments/moolre/{transaction}/status', [MoolrePaymentController::class, 'publicStatus']);
 
     // ── [WeWire Public Collection Page] ── Reachable via the shareable /pay/{reference} link
     // — no Meridian account required. See WeWirePaymentController::lookupPublic.
     Route::get('/payments/wewire/lookup/{reference}', [WeWirePaymentController::class, 'lookupPublic']);
-    // "Proceed with payment" button — only responds while WeWire is in simulation mode (see
-    // WeWirePaymentController::simulatePublicPayment). WeWire has no real hosted checkout, so
-    // this stands in for someone actually transferring the money.
+    // "Proceed with payment" button — live-verifies the receiving account with WeWire first and
+    // only offers a simulated fallback if that fails (see WeWirePaymentController::
+    // simulatePublicPayment). WeWire has no real hosted checkout, so there's no API call to
+    // actually "make" the transfer happen — the customer does that themselves.
     Route::post('/payments/wewire/simulate/{reference}', [WeWirePaymentController::class, 'simulatePublicPayment']);
 
     // ── [Demo Invite Routes] ── Landing-page validation + acceptance for a demo-invite link
@@ -234,15 +228,6 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ── [Company Subscription Routes] ── A company's own subscription history + "subscribe".
     Route::apiResource('company-subscriptions', CompanySubscriptionController::class)->only(['index', 'show', 'store']);
-
-    // ── [Moolre Payment Routes] ── Hosted-checkout mobile-money payments (see
-    // MoolrePaymentController docblock). The public webhook counterpart is registered above,
-    // outside this auth:sanctum group.
-    Route::prefix('payments/moolre')->group(function () {
-        Route::post('/trip', [MoolrePaymentController::class, 'initiateTripPayment']);
-        Route::post('/subscription', [MoolrePaymentController::class, 'initiateSubscriptionPayment']);
-        Route::get('/{transaction}/status', [MoolrePaymentController::class, 'status']);
-    });
 
     // ── [WeWire Routes] ── Business onboarding (sub-customer + KYC), up-to-3 multi-currency
     // virtual accounts, beneficiaries, the reconciliation queue, and per-trip payment plans.
