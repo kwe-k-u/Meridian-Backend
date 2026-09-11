@@ -140,7 +140,8 @@ test('public lookup resolves a payment plan by its reference code', function () 
     $lookup = $this->getJson("/api/public/payments/wewire/lookup/{$reference}");
     $lookup->assertStatus(200)
         ->assertJsonPath('payment_reference', $reference)
-        ->assertJsonPath('outstanding', 200);
+        ->assertJsonPath('outstanding', 200)
+        ->assertJsonPath('installments.0.currency', 'USD');
 
     // Both USD and GHS are always offered as choices, regardless of the plan's own currency or
     // what's actually provisioned — no ACTIVE virtual account exists yet, so both show account: null.
