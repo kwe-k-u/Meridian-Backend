@@ -31,6 +31,8 @@ class WeWireInboundTransaction extends Model
         'id',
         'wewire_transaction_id',
         'virtual_account_id',
+        'crypto_wallet_id',
+        'tx_hash',
         'amount',
         'currency',
         'reference_raw',
@@ -52,6 +54,11 @@ class WeWireInboundTransaction extends Model
     public function virtualAccount(): BelongsTo
     {
         return $this->belongsTo(WeWireVirtualAccount::class, 'virtual_account_id', 'id');
+    }
+
+    public function cryptoWallet(): BelongsTo
+    {
+        return $this->belongsTo(WeWireCryptoWallet::class, 'crypto_wallet_id', 'id');
     }
 
     public function installment(): BelongsTo

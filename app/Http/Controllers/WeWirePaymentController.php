@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\CryptoWalletStatus;
 use App\Enums\DisbursementStatus;
 use App\Enums\FundHandling;
 use App\Enums\InboundMatchStatus;
@@ -18,6 +19,7 @@ use App\Models\PaymentPlan;
 use App\Models\Transaction;
 use App\Models\Trip;
 use App\Models\WeWireBeneficiary;
+use App\Models\WeWireCryptoWallet;
 use App\Models\WeWireDisbursement;
 use App\Models\WeWireInboundTransaction;
 use App\Models\WeWireVirtualAccount;
@@ -71,14 +73,28 @@ class WeWirePaymentController extends Controller
         return response()->json($this->buildLookupResponse($plan));
     }
 
+    // Currencies the public pay page always offers as a choice, regardless of the plan's own
+    // currency or which of the company's accounts happen to be active right now — the traveler
+    // picks how they want to pay (USD account, GHS mobile money, or crypto) and the outstanding
+    // balance is shown converted into whichever they pick. A currency with no active account
+    // yet still appears as a pickable option, just with `account: null` — see PayInstallment.tsx.
+    private const PAYABLE_CURRENCIES = ['USD', 'GHS'];
+
     // Shared by lookupPublic() and simulatePublicPayment() so the "pay now" page and the demo
     // "simulate payment" action return an identically-shaped payload.
     private function buildLookupResponse(PaymentPlan $plan): array
     {
-        $account = WeWireVirtualAccount::where('company_id', $plan->trip->company_id)
-            ->where('currency', $plan->currency)
+        $companyId = $plan->trip->company_id;
+
+        $accountsByCurrency = WeWireVirtualAccount::where('company_id', $companyId)
             ->where('status', VirtualAccountStatus::ACTIVE->value)
-            ->first();
+            ->whereIn('currency', self::PAYABLE_CURRENCIES)
+            ->get()
+            ->keyBy('currency');
+
+        $wallets = WeWireCryptoWallet::where('company_id', $companyId)
+            ->where('status', CryptoWalletStatus::ACTIVE->value)
+            ->get();
 
         $installments = $plan->installments->map(function (Installment $installment) {
             $paid = $installment->paidAmount();
@@ -93,22 +109,48 @@ class WeWirePaymentController extends Controller
             ];
         });
 
+        $outstanding = round($installments->sum('outstanding'), 2);
+
         return [
             'payment_reference' => $plan->payment_reference,
             'trip_name' => $plan->trip->trip_name,
             'company_name' => $plan->trip->company->company_name,
             'total_amount' => $plan->total_amount,
             'currency' => $plan->currency,
-            'outstanding' => round($installments->sum('outstanding'), 2),
+            'outstanding' => $outstanding,
             'status' => $plan->status,
             'installments' => $installments,
-            'payment_account' => $account ? [
-                'currency' => $account->currency,
-                'account_number' => $account->account_number,
-                'iban' => $account->iban,
-                'sort_code' => $account->sort_code,
-                'routing_number' => $account->routing_number,
-            ] : null,
+            // One entry per currency in PAYABLE_CURRENCIES, always — `account` is null if the
+            // company doesn't have an active one in that currency yet (still shown as a choice,
+            // just not payable through until the agency finishes setting it up). `outstanding`
+            // here is the same balance converted into *this* currency for display, since a
+            // traveler paying in GHS against a USD-denominated plan needs to know how many GHS
+            // to actually send — see CurrencyService::convert.
+            'payment_options' => collect(self::PAYABLE_CURRENCIES)->map(function (string $currency) use ($accountsByCurrency, $outstanding, $plan) {
+                $account = $accountsByCurrency->get($currency);
+                return [
+                    'currency' => $currency,
+                    'outstanding' => \App\Services\CurrencyService::convert($outstanding, $plan->currency, $currency),
+                    'account' => $account ? [
+                        'currency' => $account->currency,
+                        'account_number' => $account->account_number,
+                        'iban' => $account->iban,
+                        'sort_code' => $account->sort_code,
+                        'routing_number' => $account->routing_number,
+                    ] : null,
+                ];
+            })->values(),
+            // Crypto deposits can't be auto-matched to this plan the way a bank transfer's
+            // reference code can (see handleWalletDepositReceived) — the pay page shows this as
+            // a genuine alternative, but makes clear a human will reconcile it, not the system.
+            // Stablecoins are pegged ~1:1 to USD, so the USD-converted outstanding applies here.
+            'payment_wallets' => $wallets->map(fn (WeWireCryptoWallet $w) => [
+                'asset' => $w->asset,
+                'chain' => $w->chain,
+                'network' => $w->network,
+                'address' => $w->deposit_address,
+            ])->values(),
+            'crypto_outstanding' => \App\Services\CurrencyService::convert($outstanding, $plan->currency, 'USD'),
         ];
     }
 
@@ -142,13 +184,24 @@ class WeWirePaymentController extends Controller
             return response()->json(['message' => 'We couldn\'t find a payment matching that reference. Double-check the code and try again.'], 404);
         }
 
+        // Which of PAYABLE_CURRENCIES the traveler picked on the pay page — defaults to the
+        // plan's own currency for callers that don't send one, but a traveler can pick *any*
+        // payable currency regardless of what the plan itself is denominated in (see
+        // buildLookupResponse's payment_options) — reconciliation converts correctly either way,
+        // see Installment::paidAmount().
+        $validated = $request->validate([
+            'currency' => ['nullable', 'string', Rule::in(self::PAYABLE_CURRENCIES)],
+            'confirm_simulated' => 'nullable|boolean',
+        ]);
+        $currency = $validated['currency'] ?? (in_array($plan->currency, self::PAYABLE_CURRENCIES, true) ? $plan->currency : self::PAYABLE_CURRENCIES[0]);
+
         $account = WeWireVirtualAccount::where('company_id', $plan->trip->company_id)
-            ->where('currency', $plan->currency)
+            ->where('currency', $currency)
             ->where('status', VirtualAccountStatus::ACTIVE->value)
             ->first();
 
         if (!$account) {
-            return response()->json(['message' => "Your agency hasn't finished setting up payments in {$plan->currency} yet."], 422);
+            return response()->json(['message' => "Your agency hasn't finished setting up payments in {$currency} yet."], 422);
         }
 
         $confirmSimulated = $request->boolean('confirm_simulated');
@@ -193,14 +246,17 @@ class WeWirePaymentController extends Controller
 
         $outstanding = $plan->installments->first(fn(Installment $i) => $i->paidAmount() < $i->amount);
         while ($outstanding) {
-            $amount = round($outstanding->amount - $outstanding->paidAmount(), 2);
+            $remaining = round($outstanding->amount - $outstanding->paidAmount(), 2);
+            // The installment's own remaining balance, converted into whichever currency the
+            // traveler picked — the amount actually "received" for this simulated transfer.
+            $amount = \App\Services\CurrencyService::convert($remaining, $outstanding->currency, $currency);
 
             $inbound = WeWireInboundTransaction::create([
                 'id' => IdGeneratorService::generateId('WIT'),
                 'wewire_transaction_id' => IdGeneratorService::generateId('SIM'),
                 'virtual_account_id' => $account->id,
                 'amount' => $amount,
-                'currency' => $plan->currency,
+                'currency' => $currency,
                 'reference_raw' => $plan->payment_reference,
                 'matched_payment_reference' => $plan->payment_reference,
                 'status' => InboundMatchStatus::UNMATCHED->value,
@@ -236,6 +292,8 @@ class WeWirePaymentController extends Controller
             'transaction.status_updated' => $this->handleTransactionStatusUpdated($data),
             'virtual_account.status_updated' => $this->handleAccountStatusUpdated($data),
             'subcustomer.kyc_status_updated' => $this->handleKycStatusUpdated($data),
+            'subcustomer.wallet.created' => $this->handleWalletCreated($data),
+            'subcustomer.wallet.deposit.received' => $this->handleWalletDepositReceived($data),
             default => Log::info('Unhandled WeWire webhook event', ['eventType' => $eventType]),
         };
 
@@ -604,6 +662,70 @@ class WeWirePaymentController extends Controller
         ], fn($v) => $v !== null));
     }
 
+    // A wallet request (WeWireCryptoWalletController::store) may come back ACTIVE immediately,
+    // or WeWire may finish provisioning it asynchronously and tell us here instead — updates
+    // whichever WeWireCryptoWallet row matches, same idea as handleAccountStatusUpdated() for
+    // bank accounts. Payload confirmed against WeWire's docs: {walletId, subCustomerId, asset,
+    // chain, network, address, label, activatedAt}.
+    private function handleWalletCreated(array $data): void
+    {
+        $wewireWalletId = $data['walletId'] ?? $data['id'] ?? null;
+        if (!$wewireWalletId) {
+            return;
+        }
+
+        $wallet = WeWireCryptoWallet::where('wewire_wallet_id', $wewireWalletId)->first();
+        if (!$wallet) {
+            return;
+        }
+
+        $wallet->update(array_filter([
+            'status' => CryptoWalletStatus::ACTIVE->value,
+            'deposit_address' => $data['address'] ?? $wallet->deposit_address,
+            'network' => $data['network'] ?? $wallet->network,
+        ], fn($v) => $v !== null));
+    }
+
+    // A stablecoin deposit landed in one of the company's crypto wallets. Unlike a bank
+    // transfer, a crypto deposit essentially never carries a matchable reference/memo (most
+    // chains WeWire supports have none), so this always creates an UNMATCHED row — the same
+    // reconciliation queue/UI a bank transfer's handlePayIn() feeds, just via crypto_wallet_id
+    // instead of virtual_account_id. Payload field names aren't documented, so this reads
+    // several plausible variants defensively (same pattern handlePayIn() uses).
+    private function handleWalletDepositReceived(array $data): void
+    {
+        $txHash = $data['txHash'] ?? $data['transactionHash'] ?? $data['hash'] ?? null;
+        $wewireTransactionId = $data['id'] ?? $data['transactionId'] ?? $txHash;
+        if (!$wewireTransactionId) {
+            Log::warning('WeWire wallet deposit webhook missing a transaction identifier', ['data' => $data]);
+            return;
+        }
+
+        if (WeWireInboundTransaction::where('wewire_transaction_id', $wewireTransactionId)->exists()) {
+            return; // Already processed this delivery.
+        }
+
+        $walletIdentifier = $data['walletId'] ?? $data['id'] ?? null;
+        $wallet = $walletIdentifier ? WeWireCryptoWallet::where('wewire_wallet_id', $walletIdentifier)->first() : null;
+
+        WeWireInboundTransaction::create([
+            'id' => IdGeneratorService::generateId('WIT'),
+            'wewire_transaction_id' => $wewireTransactionId,
+            'crypto_wallet_id' => $wallet?->id,
+            'tx_hash' => $txHash,
+            'amount' => $data['amount'] ?? 0,
+            // Stablecoins are pegged ~1:1 to USD — record against USD regardless of which asset
+            // (USDC/USDT) actually moved, so it's comparable to a USD bank collection.
+            'currency' => 'USD',
+            'reference_raw' => $data['memo'] ?? $data['reference'] ?? null,
+            'matched_payment_reference' => null,
+            'status' => InboundMatchStatus::UNMATCHED->value,
+            'received_at' => now(),
+        ]);
+
+        Log::info('WeWire crypto deposit received — awaiting manual match', ['wewire_transaction_id' => $wewireTransactionId, 'wallet_id' => $wallet?->id]);
+    }
+
     private function handleKycStatusUpdated(array $data): void
     {
         $subCustomerId = $data['subCustomerId'] ?? $data['id'] ?? null;
@@ -854,15 +976,22 @@ class WeWirePaymentController extends Controller
         return ['currency' => $currency, 'collected' => $collected, 'disbursed' => $disbursed, 'held' => round($collected - $disbursed, 2)];
     }
 
-    // Sum of every *completed* WeWire transaction collected against a plan's installments —
-    // the gross amount available to pay out, before subtracting anything already disbursed.
-    // Assumes installments.installmentPayments.transaction is eager-loaded.
+    // Sum of every *completed* WeWire transaction collected against a plan's installments,
+    // converted into the plan's own currency — the gross amount available to pay out, before
+    // subtracting anything already disbursed. Same cross-currency reasoning as
+    // Installment::paidAmount() (a traveler can pay through any currency/crypto option offered,
+    // not just the plan's own). Assumes installments.installmentPayments.transaction is
+    // eager-loaded.
     private function collectedViaWeWire(PaymentPlan $plan): float
     {
-        return round($plan->installments->sum(function (Installment $installment) {
+        return round($plan->installments->sum(function (Installment $installment) use ($plan) {
             return $installment->installmentPayments
                 ->filter(fn(InstallmentPayment $ip) => $ip->transaction?->status === TransactionStatus::COMPLETED)
-                ->sum(fn(InstallmentPayment $ip) => (float) $ip->transaction->amount);
+                ->sum(fn(InstallmentPayment $ip) => \App\Services\CurrencyService::convert(
+                    (float) $ip->transaction->amount,
+                    $ip->transaction->currency,
+                    $plan->currency,
+                ));
         }), 2);
     }
 }

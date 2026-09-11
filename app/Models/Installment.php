@@ -54,12 +54,21 @@ class Installment extends Model
         return $this->hasMany(InstallmentPayment::class, 'installment_id', 'id');
     }
 
-    // Sum of every *completed* transaction paid against this installment so far.
+    // Sum of every *completed* transaction paid against this installment so far, converted
+    // into this installment's own currency. A traveler can pay through any of the WeWire
+    // options offered on the public pay page (USD/GHS account, or crypto) regardless of which
+    // currency the plan/installment itself is denominated in — see WeWirePaymentController::
+    // buildLookupResponse — so a transaction's own currency won't always match this
+    // installment's, and summing the raw numbers together would silently over/under-count.
     public function paidAmount(): float
     {
         $this->loadMissing('installmentPayments.transaction');
-        return (float) $this->installmentPayments
+        return round((float) $this->installmentPayments
             ->filter(fn(InstallmentPayment $ip) => $ip->transaction?->status?->value === 'completed')
-            ->sum(fn(InstallmentPayment $ip) => (float) $ip->transaction->amount);
+            ->sum(fn(InstallmentPayment $ip) => \App\Services\CurrencyService::convert(
+                (float) $ip->transaction->amount,
+                $ip->transaction->currency,
+                $this->currency,
+            )), 2);
     }
 }

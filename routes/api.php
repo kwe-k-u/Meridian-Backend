@@ -24,6 +24,7 @@ use App\Http\Controllers\EmailController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WeWireAccountController;
 use App\Http\Controllers\WeWireBeneficiaryController;
+use App\Http\Controllers\WeWireCryptoWalletController;
 use App\Http\Controllers\WeWireOnboardingController;
 use App\Http\Controllers\WeWirePaymentController;
 use Illuminate\Support\Facades\Route;
@@ -230,15 +231,18 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('company-subscriptions', CompanySubscriptionController::class)->only(['index', 'show', 'store']);
 
     // ── [WeWire Routes] ── Business onboarding (sub-customer + KYC), up-to-3 multi-currency
-    // virtual accounts, beneficiaries, the reconciliation queue, and per-trip payment plans.
-    // See WeWireOnboardingController/WeWireAccountController/WeWireBeneficiaryController/
-    // PaymentPlanController/WeWirePaymentController docblocks. The public collection page and
-    // webhook counterparts are registered above, outside this auth:sanctum group.
+    // virtual accounts, stablecoin crypto wallets, beneficiaries, the reconciliation queue, and
+    // per-trip payment plans. See WeWireOnboardingController/WeWireAccountController/
+    // WeWireCryptoWalletController/WeWireBeneficiaryController/PaymentPlanController/
+    // WeWirePaymentController docblocks. The public collection page and webhook counterparts
+    // are registered above, outside this auth:sanctum group.
     Route::prefix('wewire')->group(function () {
         Route::post('/subcustomer', [WeWireOnboardingController::class, 'registerSubCustomer']);
         Route::post('/subcustomer/kyc', [WeWireOnboardingController::class, 'submitKyc']);
         Route::get('/subcustomer', [WeWireOnboardingController::class, 'status']);
         Route::apiResource('accounts', WeWireAccountController::class)->only(['index', 'store', 'update']);
+        Route::get('/wallets/supported-assets', [WeWireCryptoWalletController::class, 'supportedAssets']);
+        Route::apiResource('wallets', WeWireCryptoWalletController::class)->only(['index', 'store']);
         Route::apiResource('beneficiaries', WeWireBeneficiaryController::class)->only(['index', 'store']);
         Route::get('/inbound', [WeWirePaymentController::class, 'listInbound']);
         Route::post('/inbound/{inbound}/match', [WeWirePaymentController::class, 'matchInbound']);

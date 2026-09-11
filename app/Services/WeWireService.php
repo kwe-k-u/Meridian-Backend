@@ -146,6 +146,43 @@ class WeWireService
         }, $confirmSimulated, fn (array $data) => isset($data['id']));
     }
 
+    // GET /v1/wallets/supported-assets — the catalog of (asset, chain) pairs WeWire currently
+    // issues crypto deposit wallets for (https://docs.wewire.com/concepts/crypto-wallets). A
+    // read-only catalog lookup, not gated by the confirm/fallback dance the money-moving calls
+    // use — if it fails there's nothing to "proceed with simulated" about, the caller just
+    // shows an error.
+    public function getSupportedWalletAssets(): array
+    {
+        return $this->get('/v1/wallets/supported-assets');
+    }
+
+    // POST /v1/subcustomers/{id}/wallets/request — requests a stablecoin deposit wallet for one
+    // (asset, chain) pair. $confirmSimulated — see requestVirtualAccount() above.
+    public function requestWallet(string $subCustomerId, string $asset, string $chain, bool $confirmSimulated = false): array
+    {
+        return $this->liveCall('post', "/v1/subcustomers/{$subCustomerId}/wallets/request", [
+            'asset' => $asset,
+            'chain' => $chain,
+        ], function () use ($asset, $chain) {
+            return [
+                'id' => 'SIM_WAL_' . strtoupper(\Illuminate\Support\Str::random(10)),
+                'asset' => $asset,
+                'chain' => $chain,
+                'status' => 'ACTIVE',
+                'address' => '0xSIM' . strtoupper(\Illuminate\Support\Str::random(36)),
+            ];
+        }, $confirmSimulated, fn (array $data) => isset($data['id']) || isset($data['walletId']));
+    }
+
+    // GET /v1/subcustomers/{subCustomerId}/wallets/{walletId} — a wallet's current status/
+    // address, for live-verifying it the same way getVirtualAccount() does for bank accounts.
+    public function getWallet(string $subCustomerId, string $walletId, bool $confirmSimulated = false): array
+    {
+        return $this->liveCall('get', "/v1/subcustomers/{$subCustomerId}/wallets/{$walletId}", [], function () use ($walletId) {
+            return ['id' => $walletId, 'status' => 'ACTIVE'];
+        }, $confirmSimulated, fn (array $data) => isset($data['status']));
+    }
+
     // GET /v1/subcustomers/{subCustomerId}/accounts/{accountId} — the real-time status of an
     // already-requested virtual account (https://docs.wewire.com/api-reference/
     // sub-customer-accounts/get-account). Used to verify an account is genuinely ACTIVE on

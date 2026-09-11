@@ -58,4 +58,10 @@ class Company extends Model
     {
         return $this->hasMany(WeWireBeneficiary::class, 'company_id', 'company_id');
     }
+
+    // This company's WeWire stablecoin deposit wallets (one per asset/chain pair).
+    public function wewireCryptoWallets(): HasMany
+    {
+        return $this->hasMany(WeWireCryptoWallet::class, 'company_id', 'company_id');
+    }
 }

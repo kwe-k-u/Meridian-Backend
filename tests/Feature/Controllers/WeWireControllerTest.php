@@ -140,8 +140,14 @@ test('public lookup resolves a payment plan by its reference code', function () 
     $lookup = $this->getJson("/api/public/payments/wewire/lookup/{$reference}");
     $lookup->assertStatus(200)
         ->assertJsonPath('payment_reference', $reference)
-        ->assertJsonPath('outstanding', 200)
-        ->assertJsonPath('payment_account', null); // no ACTIVE virtual account provisioned yet
+        ->assertJsonPath('outstanding', 200);
+
+    // Both USD and GHS are always offered as choices, regardless of the plan's own currency or
+    // what's actually provisioned — no ACTIVE virtual account exists yet, so both show account: null.
+    $options = collect($lookup->json('payment_options'))->keyBy('currency');
+    expect($options->keys()->sort()->values()->all())->toBe(['GHS', 'USD']);
+    expect($options['USD']['account'])->toBeNull();
+    expect($options['GHS']['account'])->toBeNull();
 });
 
 test('the public pay page verifies the account live with WeWire before letting the customer proceed', function () {
@@ -224,6 +230,52 @@ test('confirming a simulated public payment is refused when WeWire simulation mo
 
     $res = $this->postJson("/api/public/payments/wewire/simulate/{$reference}", ['confirm_simulated' => true]);
     $res->assertStatus(403);
+});
+
+test('a traveler can pay a USD plan through the GHS account and it reconciles correctly', function () {
+    config(['services.wewire.allow_simulated_payments' => true]);
+
+    $user = User::factory()->create();
+    $trip = Trip::factory()->create();
+    attachOwner($trip, $user);
+    $company = $trip->company;
+    $this->actingAs($user, 'sanctum');
+
+    // A GHS account, but the plan itself is denominated in USD — the traveler should still be
+    // able to pay through it (see WeWirePaymentController::PAYABLE_CURRENCIES), and the
+    // installment must come out correctly converted, not just zeroed by raw number comparison.
+    WeWireVirtualAccount::create([
+        'id' => 'VAC_CROSSCUR01', 'company_id' => $company->company_id, 'currency' => 'GHS', 'status' => 'active',
+    ]);
+
+    $planRes = $this->postJson("/api/trips/{$trip->trip_id}/payment-plan", [
+        'total_amount' => 100, 'currency' => 'USD', 'installments' => [['amount' => 100]],
+    ]);
+    $reference = $planRes->json('payment_reference');
+
+    // Both currencies are offered regardless of the plan's own USD denomination.
+    $lookup = $this->getJson("/api/public/payments/wewire/lookup/{$reference}");
+    $options = collect($lookup->json('payment_options'))->keyBy('currency');
+    expect($options['USD']['account'])->toBeNull();
+    expect($options['GHS']['account'])->not->toBeNull();
+    // 100 USD converted to GHS at CurrencyService's fallback rate (11.42) = 1142.
+    expect((float) $options['GHS']['outstanding'])->toBe(1142.0);
+
+    $confirmed = $this->postJson("/api/public/payments/wewire/simulate/{$reference}", [
+        'currency' => 'GHS', 'confirm_simulated' => true,
+    ]);
+    $confirmed->assertStatus(200)->assertJsonPath('outstanding', 0);
+
+    // The inbound transaction was recorded in GHS (what was actually "received")...
+    $this->assertDatabaseHas('wewire_inbound_transactions', [
+        'matched_payment_reference' => $reference, 'currency' => 'GHS', 'amount' => 1142,
+    ]);
+    // ...but the installment (USD-denominated) is correctly fully paid, not left outstanding
+    // because 1142 "looks like" far more than 100 in raw-number terms, nor overpaid because the
+    // conversion was skipped entirely.
+    $installment = \App\Models\Installment::where('payment_plan_id', \App\Models\PaymentPlan::where('payment_reference', $reference)->first()->id)->first();
+    expect($installment->paidAmount())->toBe(100.0);
+    expect($installment->status->value)->toBe('paid');
 });
 
 test('webhook rejects a request with an invalid signature', function () {
