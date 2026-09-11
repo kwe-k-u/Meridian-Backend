@@ -1,59 +1,99 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Meridian Backend
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+The API behind **Meridian**, an AI-assisted platform for travel agencies: build trip
+itineraries, send them to travelers for approval, collect payment, and pay out flights,
+hotels, and activity providers — all from one dashboard.
 
-## About Laravel
+Laravel 12 (PHP 8.2+), Sanctum-authenticated, backed by MySQL. Pairs with
+[Meridian-Frontend](../Meridian-Frontend) (React + TypeScript + Vite).
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## What it does
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+- **Trips & itineraries** — agencies create a trip, generate one or more itinerary options
+  (flights, accommodation, day-by-day activities) via AI (`MeridianAiService`), and a traveler
+  accepts one through a shareable link (no account required).
+- **Payments via [WeWire](https://docs.wewire.com/)** — multi-currency virtual accounts (bank
+  transfer / mobile money) and stablecoin crypto wallets (USDC/USDT on Base, Ethereum, Polygon,
+  or Tron). A traveler pays through a Meridian-hosted `/pay/{reference}` page — WeWire has no
+  hosted checkout — choosing USD, GHS, or crypto regardless of which the agency has actually
+  provisioned yet. Collected funds can auto-disburse to a beneficiary, or be paid out later to
+  the agency or a specific service provider (`WeWirePaymentController::payoutTrip`).
+- **Live-call / simulated-fallback pattern** — every WeWire-backed write (account request,
+  payout, beneficiary, wallet) tries the real API first; if it fails, the caller is offered a
+  "Response from wewire server" popup showing what WeWire actually said, with the option to
+  proceed with a simulated result instead (flagged `is_simulated` everywhere it lands in the
+  database, so simulated and real data are always distinguishable). See `WeWireService::liveCall()`.
+- **Inbox integrations** — Gmail (OAuth, thread ingestion, polling job) and Google Calendar
+  (event watching) so agent-traveler correspondence and calls surface in the dashboard.
+- **Subscriptions** — agency subscription billing via [Paystack](https://paystack.com/docs/).
+- **Multi-currency accounting** — every "how much has been paid / is still outstanding"
+  calculation converts through `CurrencyService` before summing, since a trip can be paid
+  through several different currencies and wallets across its lifetime.
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+## Tech stack
 
-## Learning Laravel
+| | |
+|---|---|
+| Framework | Laravel 12, PHP 8.2+ |
+| Auth | Laravel Sanctum (bearer tokens) |
+| Database | MySQL |
+| Testing | Pest 3 |
+| Payments | WeWire API (collections, payouts, crypto wallets), Paystack (subscriptions) |
+| Email/Calendar | Gmail API, Google Calendar API |
+| AI | `MeridianAiService` (itinerary generation) |
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Getting started
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+```bash
+composer install
+cp .env.example .env
+php artisan key:generate
+```
 
-## Laravel Sponsors
+Fill in `.env`: a MySQL connection, `WEWIRE_API_KEY` / `WEWIRE_BASE_URL` /
+`WEWIRE_WEBHOOK_SECRET`, Paystack keys, and Google/Firebase credentials for the Gmail/Calendar
+integrations. Leave `WEWIRE_SIMULATE=true` if you don't have a live WeWire sandbox account —
+KYC and beneficiary creation will be faked; everything else still needs a real account to call.
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+```bash
+php artisan migrate
+composer run dev
+```
 
-### Premium Partners
+`composer run dev` runs the app server, queue worker, log tailer (`pail`), and Vite together.
+Just the API: `php artisan serve`.
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+## Testing
 
-## Contributing
+```bash
+php artisan test
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Pest, `RefreshDatabase` per test, WeWire calls mocked via `Http::fake()` — no real API keys
+needed to run the suite.
 
-## Code of Conduct
+## Project structure
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```
+app/Http/Controllers/   One controller per resource (Trip, Itinerary, WeWire*, Gmail, ...)
+app/Services/            External API clients (WeWireService, PaystackService, Gmail/*, CurrencyService)
+app/Models/               Eloquent models
+app/Enums/                Status/type enums shared between models and controllers
+database/migrations/      Schema history
+tests/Feature/Controllers/  One Pest file per controller, HTTP-level tests
+routes/api.php            All routes (grouped: public, authenticated)
+```
 
-## Security Vulnerabilities
+## Key routes
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+| Route | Purpose |
+|---|---|
+| `GET /api/trips`, `POST /api/trips/{trip}/generate-itinerary` | Trip + itinerary management |
+| `POST /api/public/trips/{trip}/itineraries/{itinerary}/accept` | Traveler accepts an itinerary (no auth) |
+| `GET /api/public/payments/wewire/lookup/{reference}` | Public pay-page data |
+| `POST /api/public/payments/wewire/simulate/{reference}` | The pay page's "Proceed with payment" action |
+| `POST /api/payments/wewire/webhook` | WeWire webhook receiver (HMAC-verified) |
+| `GET /api/wewire/trip-balances`, `POST /api/trips/{trip}/payout` | Dashboard payout flow |
+| `GET /api/trips/{trip}/costs` | Cost/payment summary for the trip overview and detail pages |
 
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Full list: `php artisan route:list`.
